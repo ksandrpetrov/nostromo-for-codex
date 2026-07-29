@@ -1,0 +1,74 @@
+[
+  {
+    "name": "focus-chatgpt",
+    "requiredPayloadKeys": []
+  },
+  {
+    "name": "insert-composer-text",
+    "requiredPayloadKeys": [
+      "text"
+    ]
+  },
+  {
+    "name": "insert-skill-mention",
+    "requiredPayloadKeys": [
+      "displayName",
+      "name",
+      "path"
+    ]
+  },
+  {
+    "name": "navigate-route",
+    "requiredPayloadKeys": [
+      "path"
+    ]
+  },
+  {
+    "name": "prepare-plugin-prompt",
+    "requiredPayloadKeys": [
+      "text"
+    ]
+  },
+  {
+    "name": "push-to-talk-start",
+    "requiredPayloadKeys": []
+  },
+  {
+    "name": "push-to-talk-stop",
+    "requiredPayloadKeys": []
+  },
+  {
+    "name": "query-runtime-state",
+    "requiredPayloadKeys": []
+  },
+  {
+    "name": "run-command",
+    "requiredPayloadKeys": [
+      "commandId"
+    ]
+  },
+  {
+    "name": "scroll-task",
+    "requiredPayloadKeys": [
+      "deltaY"
+    ]
+  },
+  {
+    "name": "stop-active",
+    "requiredPayloadKeys": []
+  },
+  {
+    "name": "submit-active-composer",
+    "requiredPayloadKeys": []
+  },
+  {
+    "name": "toggle-chat-work-mode",
+    "requiredPayloadKeys": []
+  },
+  {
+    "name": "toggle-chatgpt",
+    "requiredPayloadKeys": [
+      "minimizeIfVisible"
+    ]
+  }
+]

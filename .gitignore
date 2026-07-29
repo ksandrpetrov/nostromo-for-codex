@@ -1,0 +1,20 @@
+# macOS metadata
+.DS_Store
+._*
+
+# Local IDE and Xcode state
+.idea/
+*.iml
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# Swift Package Manager build state
+.build/
+.swiftpm/
+
+# Generated application bundle
+/dist/
+
+# Generated from Resources/AppIcon.png
+/Resources/AppIcon.icns
