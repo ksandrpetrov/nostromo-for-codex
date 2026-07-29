@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Сообщить об уязвимости
+    url: https://github.com/ksandrpetrov/nostromo-for-codex/security/advisories/new
+    about: Отправьте чувствительный security report приватно.

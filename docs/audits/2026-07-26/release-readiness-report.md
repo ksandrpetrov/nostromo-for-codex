@@ -1,5 +1,8 @@
 # Nostromo Codex — релизная приёмка 2026-07-26
 
+> Исторический отчёт, superseded более поздним
+> [`automated-release-audit.md`](automated-release-audit.md).
+
 ## Итог
 
 Статус публичного релиза: **NO-GO до ручной физической матрицы**.

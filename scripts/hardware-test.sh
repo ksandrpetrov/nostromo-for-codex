@@ -78,7 +78,7 @@ inventory() {
 
 checklist() {
   sed -n '/^## Физическая матрица/,/^## /p' \
-    "$project_dir/Testing/DeepTestReport.md" | sed '$d'
+    "$project_dir/docs/hardware-acceptance.md" | sed '$d'
 }
 
 launch_hid_only() {

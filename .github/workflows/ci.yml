@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Swift and preload regressions
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      NOSTROMO_CODEX_LIVE_E2E: "0"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          node --version
+
+      - name: Build release with warnings as errors
+        run: swift build -c release -Xswiftc -warnings-as-errors
+
+      - name: Run Swift tests
+        run: swift test --skip NostromoCodexAppTests.LiveChatGPTE2ETests
+
+      - name: Check preload syntax
+        run: node --check Sources/NostromoCodexApp/Resources/chatgpt-preload.cjs
+
+      - name: Run preload regressions
+        run: |
+          node Tests/preload-unit.cjs
+          node Tests/preload-smoke.cjs
+
+      - name: Check documentation links
+        run: node Tests/docs-links.cjs

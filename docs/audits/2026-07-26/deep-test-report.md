@@ -1,9 +1,12 @@
 # Nostromo Codex — отчёт глубокого тестирования
 
+> Архивный объединённый отчёт. Он содержит результаты нескольких
+> последовательных состояний исходников и не описывает текущую ветку.
+
 ## Актуальный автоматизированный RC audit — 2026-07-26
 
 Авторитетный результат текущего дерева зафиксирован в
-[`AutomatedReleaseAudit-2026-07-26.md`](AutomatedReleaseAudit-2026-07-26.md).
+[`automated-release-audit.md`](automated-release-audit.md).
 Предыдущий зелёный отчёт не переиспользован: bridge, AppModel, preload и
 тесты изменялись после него.
 
@@ -32,7 +35,7 @@ ChatGPT, минимальная macOS 26.0 и второй Mac/Nostromo. Без 
 
 ## Предыдущий release-readiness прогон — исторический
 
-[`ReleaseReadinessReport-2026-07-26.md`](ReleaseReadinessReport-2026-07-26.md)
+[`release-readiness-report.md`](release-readiness-report.md)
 содержит результаты более раннего состояния исходников. Он сохранён для
 истории, но не является доказательством текущего кандидата.
 

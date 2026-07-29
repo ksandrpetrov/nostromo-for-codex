@@ -1,0 +1,28 @@
+name: Security contact request
+description: Запросить приватный канал, не раскрывая детали уязвимости
+title: "[Security contact]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Не описывайте уязвимость, exploit, токены или пользовательские данные в этой публичной форме. Укажите только общую область.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Общая область
+      options:
+        - HID isolation / input suppression
+        - Bridge authentication / runtime directory
+        - ChatGPT action execution
+        - Configuration integrity
+        - Permissions / local code signing
+        - Другая область
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Подтверждение
+      options:
+        - label: Я не включил в этот публичный issue технические детали уязвимости.
+          required: true

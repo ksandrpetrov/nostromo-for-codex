@@ -1,0 +1,32 @@
+name: Предложение
+description: Новая возможность или улучшение
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Проблема
+      description: Какой пользовательский сценарий сейчас не решён?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Предлагаемое поведение
+      description: Опишите наблюдаемый результат, а не только реализацию.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Риски и ограничения
+      description: Может ли изменение затронуть HID isolation, PTT, configuration, compatibility gate или действия в ChatGPT?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Альтернативы
+      description: Какие более простые варианты уже рассматривались?

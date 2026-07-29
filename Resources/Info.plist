@@ -31,7 +31,7 @@
     <key>LSUIElement</key>
     <true/>
     <key>NSHumanReadableCopyright</key>
-	<string>Личный проект</string>
+	<string>Copyright © 2026 Aleksandr Petrov</string>
     <key>NSInputMonitoringUsageDescription</key>
 	<string>Nostromo Codex считывает ввод с Razer Nostromo и предотвращает дублирование событий клавиатуры.</string>
 </dict>

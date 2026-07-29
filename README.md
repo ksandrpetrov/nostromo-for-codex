@@ -1,219 +1,239 @@
-# Nostromo Codex
+<div align="center">
+  <img src="Resources/AppIcon.png" width="128" alt="Иконка Nostromo Codex">
 
-Персональная нативная панель действий Codex для Razer Nostromo RZ07-0049 на
-Apple Silicon. Karabiner не используется: приложение читает интерфейсы
-`1532:0111` через `IOHIDManager`, а ChatGPT видит локально эмулированный
-Codex Micro (`303A:8360`).
+  # Nostromo Codex
 
-## Что реализовано
+  Нативная macOS-панель действий Codex для Razer Nostromo — без Karabiner.
 
-- Menu bar-приложение на Swift 6 / SwiftUI / AppKit, arm64 и macOS 26+.
-- Значок постоянно находится в верхней строке меню; приложение не показывает
-  отдельную иконку в нижнем Dock.
-- Guided setup не захватывает HID и не запускает ChatGPT до явного
-  завершения; readiness виден в menu bar и отдельном Connection-разделе.
-- Интерактивный digital twin повторяет 15 основных клавиш, thumb key 16,
-  колесо и восемь направлений D-pad; безопасный Input Test подсвечивает
-  физический ввод, но не исполняет назначения.
-- Nostromo всегда открывается как отдельный макропад с автоматическим
-  эксклюзивным HID-захватом. Если macOS запрещает `seize`, приложение
-  продолжает чтение в обычном режиме и включает отдельную защиту от печати.
-- При успешном эксклюзивном HID-захвате системная карта клавиш не меняется.
-  Если macOS разрешила только shared capture, клавиатурные HID-сервисы только
-  самого Nostromo `1532:0111` транзакционно переназначаются в `Undefined`.
-  Запись проверяется read-back, предыдущая карта атомарно сохраняется и
-  восстанавливается при отключении или следующем запуске. Пока ни один из
-  способов изоляции не подтверждён, назначения блокируются fail-closed.
-- Переназначение 16 клавиш и восьми направлений джойстика.
-- Типы назначений: task slot, Codex command, skill, plugin prompt, macOS
-  shortcut, постоянное/моментальное переключение профиля и `none`.
-- В категории режимов есть отдельное действие `Chat / Work`: оно переключает
-  верхний сегмент домашнего композитора и не меняет режим Codex или worktree.
-- Колесо: scroll; зажать и вращать — reasoning; короткое нажатие — смена
-  режима; 600 мс — панель настроек. Вращение подавляет click.
-- Push-to-talk по удержанию; двойное нажатие фиксирует запись.
-- Основная JSON-конфигурация в Application Support; импорт и экспорт через
-  системные файловые диалоги. Перед импортом показывается summary и создаётся
-  восстановимая резервная копия текущей конфигурации.
-- Searchable action library, shortcut recorder, подтверждение перезапуска
-  ChatGPT и удаления профиля, Undo последнего удаления.
-- Неактивирующий runtime HUD показывает профиль, режим колеса и состояние PTT
-  поверх рабочего пространства, не забирая keyboard focus у ChatGPT.
-- Калибровка всех клавиш, восьми векторов джойстика и нажатия колеса.
-- Project2077 bridge через Unix socket с одноразовым 256-битным токеном,
-  правами `0700/0600` и лимитами сообщений.
-- Razer feature reports для общей подсветки и profile LEDs.
-- Отдельный Lighting-раздел настраивает предел яркости и видимую 220-мс
-  обратную связь при нажатии.
-  Аппаратно Nostromo поддерживает общую подсветку клавиш, а не поклавишный RGB.
-- Три фиксированных profile LEDs не настраиваются и используются только для
-  агрегированного состояния Codex: красный — задача ждёт действия пользователя
-  или завершилась ошибкой, зелёный — есть выполняющаяся задача, синий — Codex
-  подключён, свободен и готов. Индикаторы взаимоисключающие с приоритетом
-  красный → зелёный → синий; когда Codex недоступен, все три выключены.
-  Статусные LEDs не зависят от таймера автогашения подсветки Codex Micro.
-- Проверка версии и наличия внутренних модулей до запуска ChatGPT.
+  [![CI](https://github.com/ksandrpetrov/nostromo-for-codex/actions/workflows/ci.yml/badge.svg)](https://github.com/ksandrpetrov/nostromo-for-codex/actions/workflows/ci.yml)
+  [![macOS 26+](https://img.shields.io/badge/macOS-26%2B-000000?logo=apple)](Package.swift)
+  [![Swift 6.3](https://img.shields.io/badge/Swift-6.3-F05138?logo=swift&logoColor=white)](Package.swift)
+  [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+</div>
 
-Приложение не изменяет и не переподписывает `/Applications/ChatGPT.app`.
-Preload передаётся только дочернему процессу через `NODE_OPTIONS`.
+> [!IMPORTANT]
+> Проект находится на экспериментальной стадии и собирается из исходников.
+> Публичного подписанного и notarized-бинарного дистрибутива пока нет. CI
+> проверяет сборку и автоматические regressions текущей ветки, но физическая
+> приёмка на нескольких экземплярах Nostromo и полный live E2E с ChatGPT
+> остаются ручными проверками.
 
-## Сборка
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/design-system-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/design-system-light.png">
+  <img src="docs/assets/design-system-light.png" alt="Дизайн-система Nostromo Codex">
+</picture>
 
-Требуются Swift 6.3 / SwiftPM 6.3, Xcode 26+ и установленный
-`/Applications/ChatGPT.app`.
+<p align="center"><sub>Безопасно сгенерированный SwiftUI snapshot дизайн-системы — приложение, HID и ChatGPT при его создании не запускаются.</sub></p>
+
+## Зачем это нужно
+
+Nostromo Codex превращает Razer Nostromo RZ07-0049 в отдельный макропад для
+ChatGPT Codex. Клавиши, D-pad и колесо можно назначить на команды Codex,
+видимые task slots, skills, подготовку plugin prompt, сочетания macOS и
+переключение профилей.
+
+Приложение живёт в menu bar, напрямую читает устройство через
+`IOHIDManager`, а ChatGPT получает события как от локально эмулированного
+контроллера Codex Micro. Системная клавиатурная раскладка не требуется.
+Интеграция использует проверенные внутренние интерфейсы конкретной desktop-
+сборки ChatGPT, а не официальный стабильный API; поэтому build gate является
+обязательной частью безопасности.
+
+## Возможности
+
+- 16 клавиш, восемь направлений D-pad и жесты колеса.
+- Команды Codex, task slots, skills, plugin prompts и сочетания macOS.
+- Постоянные и моментальные профили с импортом, экспортом и восстановимой
+  резервной копией.
+- Push-to-talk: удержание для записи и двойное нажатие для фиксации.
+- Интерактивный digital twin и безопасный Input Test, который не выполняет
+  назначения.
+- Runtime HUD, поиск по библиотеке действий и recorder сочетаний клавиш.
+- Общая подсветка клавиш и три status LED для состояния Codex.
+- Приватный локальный bridge с одноразовым 256-битным токеном.
+- Fail-closed защита: действия блокируются, пока ввод Nostromo не изолирован
+  от обычной печати.
+
+## Требования
+
+| Компонент | Требование |
+|---|---|
+| Mac | Apple Silicon |
+| macOS | 26.0 или новее |
+| Xcode | 26 или новее, Swift 6.3 / SwiftPM 6.3 |
+| Устройство | Razer Nostromo RZ07-0049, USB `1532:0111` |
+| ChatGPT | Установлен в `/Applications/ChatGPT.app` |
+| Совместимая сборка | `26.721.41059 (5848)` |
+| Node.js | Только для preload-тестов |
+
+Неизвестные сборки ChatGPT блокируются по умолчанию. Expert override не
+обходит отсутствие обязательных внутренних модулей и не означает
+совместимость.
+
+Проверьте установленную версию до запуска:
 
 ```sh
-./scripts/build-app.sh
+defaults read /Applications/ChatGPT.app/Contents/Info CFBundleShortVersionString
+defaults read /Applications/ChatGPT.app/Contents/Info CFBundleVersion
+```
+
+Ожидаемые результаты — соответственно `26.721.41059` и `5848`. При любом
+несовпадении текущая сборка не поддерживается: не запускайте интеграцию в
+обычном режиме.
+
+После клонирования репозитория можно пассивно сверить устройство:
+
+```sh
+./scripts/hardware-test.sh --inventory
+```
+
+Команда должна найти Razer Nostromo с USB ID `1532:0111`; она только читает
+IORegistry и не открывает HID.
+
+## Быстрый старт
+
+```sh
+git clone https://github.com/ksandrpetrov/nostromo-for-codex.git
+cd nostromo-for-codex
+./scripts/build-app.sh release
+```
+
+Сборка не запускает приложение и не открывает устройство. Следующая команда
+откроет Nostromo Codex; после завершения setup приложение сможет захватить
+HID и запустить либо подключить ChatGPT.
+
+```sh
 open "dist/Nostromo Codex.app"
 ```
 
-Иконка приложения собирается в `AppIcon.icns` из
-`Resources/AppIcon.png` автоматически.
+Первый build создаёт отдельную локальную code-signing identity в
+`~/Library/Application Support/Nostromo Codex/Signing`. Она используется
+повторно, чтобы macOS воспринимала последующие сборки как обновления одного
+приложения. Это локальная подпись: она не заменяет Developer ID и
+notarization.
 
-При первой сборке скрипт создаёт отдельную локальную code-signing identity
-в `~/Library/Application Support/Nostromo Codex/Signing`. Следующие сборки
-подписываются той же identity, поэтому macOS распознаёт их как обновления
-одного приложения и не привязывает privacy-разрешения к меняющемуся CDHash.
+### Первый запуск
 
-При первом запуске разрешите Input Monitoring в:
-
-`System Settings → Privacy & Security → Input Monitoring`.
-
-Если вы назначаете обычные macOS shortcuts, отдельно разрешите отправку
-системных событий в:
-
-`System Settings → Privacy & Security → Accessibility`.
-
-Без этого разрешения приложение явно отклоняет shortcut и показывает
-ошибку вместо молчаливого no-op.
-
-Если ChatGPT уже запущен, используйте **Restart ChatGPT…** в разделе
-Connection. Приложение сначала покажет подтверждение и напомнит сохранить
-незавершённый текст в composer, затем перезапустит ChatGPT с приватным bridge.
+1. Подключите Nostromo и завершите guided setup. До его явного завершения
+   приложение не захватывает HID и не запускает ChatGPT.
+2. Разрешите **Input Monitoring**:
+   `System Settings → Privacy & Security → Input Monitoring`.
+   macOS выдаёт приложению широкое системное разрешение наблюдать ввод;
+   Nostromo Codex использует его для событий целевого устройства.
+3. Если нужны обычные macOS shortcuts, также разрешите **Accessibility**:
+   это системное разрешение шире одной функции управления UI, но проект
+   использует его для отправки только настроенных вами сочетаний клавиш.
+4. Если ChatGPT уже запущен, сохраните незавершённый текст и используйте
+   **Restart ChatGPT…** в разделе Connection.
 
 Конфигурация хранится в:
 
-`~/Library/Application Support/Nostromo Codex/profiles.json`
+```text
+~/Library/Application Support/Nostromo Codex/profiles.json
+```
 
-## Проверка
+Импорт сначала показывает summary и создаёт резервную копию текущей
+конфигурации.
 
-Карта владельцев состояния, bridge/configuration contracts и инварианты
-безопасных изменений описаны в
-[`ARCHITECTURE.md`](ARCHITECTURE.md). Короткие правила для дальнейшего
-агентного редактирования находятся в [`AGENTS.md`](AGENTS.md), а фактические
-результаты точечного рефакторинга — в
-[`Testing/ArchitectureAudit-2026-07-26.md`](Testing/ArchitectureAudit-2026-07-26.md).
+## Как устроена интеграция
+
+```text
+Razer Nostromo
+  → IOHIDManager
+  → Nostromo Codex
+  → authenticated Unix socket
+  → preload дочернего процесса ChatGPT
+  → проверенные команды установленной сборки
+```
+
+Nostromo Codex не изменяет и не переподписывает
+`/Applications/ChatGPT.app`. Preload передаётся только запущенному
+приложением дочернему процессу через `NODE_OPTIONS`. Socket и owner marker
+создаются с ограниченными правами, а доступные команды сверяются с runtime
+capability manifest.
+
+Подробные владельцы состояния и инварианты описаны в
+[`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+## Ограничения
+
+- Поддерживается только конкретная модель Nostromo и Apple Silicon.
+- Адаптер жёстко ограничен проверенной сборкой ChatGPT; после обновления
+  ChatGPT может потребоваться изменение и повторная проверка adapter-а.
+- Готового бинарного релиза, Developer ID signing и notarization пока нет.
+- Автоматические тесты не доказывают физическую работу клавиш, D-pad, колеса,
+  PTT и LEDs на конкретном экземпляре устройства.
+- Plugin binding подготавливает composer, но не отправляет сообщение.
+
+## Разработка и проверка
+
+Короткий безопасный цикл:
 
 ```sh
-swift test
+swift test --skip NostromoCodexAppTests.LiveChatGPTE2ETests
 node --check Sources/NostromoCodexApp/Resources/chatgpt-preload.cjs
 node Tests/preload-unit.cjs
 node Tests/preload-smoke.cjs
+node Tests/docs-links.cjs
 ```
 
-Unit-тесты покрывают Project2077 framing/RPC, wheel gestures, PTT latch,
-восемь направлений, debounce, все типы назначений, JSON round-trip,
-авторитетный `skills/list`, runtime capability manifest и golden Razer
-reports/checksum.
-
-### Глубокое тестирование
-
-Полный безопасный прогон:
+Полная автоматизированная проверка:
 
 ```sh
 ./scripts/deep-test.sh --full --hardware-inventory
 ```
 
-Он последовательно проверяет debug/release tests, сборку с
-`warnings-as-errors`, ASan, TSan, синтаксис, socket-free регрессию preload
-и 50 smoke-запусков preload,
-упаковку `.app`, содержимое bundle, strict-проверку локальной signature,
-arm64-only и minimum macOS 26.0. Все шаги выполняются даже после отдельного
-сбоя; итоговый exit code будет ненулевым, если упал хотя бы один.
+Runner проверяет debug/release, warnings-as-errors, ASan, TSan, preload,
+упаковку `.app`, подпись, архитектуру и minimum macOS. Он не открывает
+Nostromo Codex, не захватывает HID, не управляет LEDs и не
+запускает/останавливает ChatGPT.
 
-Baseline 2026-07-25: 12/12 шагов полного runner-а и отдельная read-only
-HID inventory имеют статус `PASS`; 139/139 Swift-тестов отдельно в debug,
-release, ASan и TSan; 50 запусков по 8 preload-сценариев
-(400/400 исполнений). Это безопасный автоматизированный scope, а не
-физическая или live-ChatGPT приёмка.
-
-Быстрый прогон без санитайзеров:
-
-```sh
-./scripts/deep-test.sh --quick
-```
-
-Логи, `results.jsonl` и `summary.md` записываются под
-`${TMPDIR}/nostromo-codex-deep-test/<UTC timestamp>/`, то есть вне
-репозитория. Другой каталог задаётся флагом `--results-dir`.
-
-Runner не открывает Nostromo Codex, не захватывает HID, не пишет в LEDs и
-не запускает/останавливает ChatGPT. Read-only инвентаризацию подключённого
-устройства и ручной checklist можно вызвать отдельно:
+Ручные режимы намеренно отделены:
 
 ```sh
 ./scripts/hardware-test.sh --inventory
 ./scripts/hardware-test.sh --checklist
-```
-
-Для физической проверки без bridge и без риска отправить действие в
-ChatGPT сначала соберите приложение, затем запустите отдельный режим:
-
-```sh
-./scripts/build-app.sh release
 ./scripts/hardware-test.sh --launch-hid-only
 ```
 
-В `HID-only` приложение может эксклюзивно захватить Nostromo и управлять
-его диагностической подсветкой, но не стартует bridge, не
-запускает/останавливает ChatGPT, не выполняет shortcuts, bindings или
-переходы профилей. Последние 2000 raw HID-событий видны и экспортируются
-как JSON в разделе «Диагностика». Перед обычным E2E полностью завершите
-HID-only экземпляр.
+`--inventory` пассивно читает IORegistry, а `--checklist` только печатает
+инструкцию. `--launch-hid-only` открывает устройство и может эксклюзивно
+захватить его, поэтому запускайте этот режим только осознанно.
 
-Полная матрица, baseline и форма для дефектов находятся в
-[`Testing/DeepTestReport.md`](Testing/DeepTestReport.md). Физические
-нажатия, LEDs и bridge E2E с перезапуском ChatGPT остаются отдельным ручным
-этапом и не помечаются пройденными по результатам автоматического runner.
+## Удаление
 
-## Граница совместимости
+1. Полностью завершите Nostromo Codex, чтобы освободить HID и восстановить
+   временную защиту клавиатурных usages.
+2. Удалите собранный `dist/Nostromo Codex.app`.
+3. Если конфигурация и локальная signing identity больше не нужны, переместите
+   в Корзину `~/Library/Application Support/Nostromo Codex`.
+4. При необходимости удалите Nostromo Codex из списков Input Monitoring и
+   Accessibility в System Settings.
+5. Завершите ChatGPT, который был запущен через Nostromo Codex, и запустите
+   `/Applications/ChatGPT.app` обычным способом. Так новый процесс стартует
+   без preload из прежней интеграции.
 
-Целевая разрешённая сборка adapter-а: ChatGPT `26.721.41059 (5848)`;
-preload/mock regression для неё пройден. Полный live E2E с этой сборкой
-остаётся ручным этапом. Неизвестная сборка блокируется. Override для
-непроверенной сборки находится под Expert options в Connection, но не означает
-совместимость.
+## Документация
 
-При запуске preload читает command registry фактически установленного
-`app.asar`, пересекает его с проверенным безопасным набором действий и
-передаёт capability manifest приложению. Пока manifest не получен,
-registry-зависимые команды заблокированы. Если shape registry изменился,
-используется только проверенный fallback для разрешённой сборки; неизвестный
-command ID всегда отклоняется. Build 5848 не регистрирует desktop-команды
-для permissions picker, `compact` и `status`, поэтому они явно показываются
-как недоступные, а не имитируются через ввод в composer.
+- [Карта документации](docs/README.md)
+- [Архитектура и критические инварианты](ARCHITECTURE.md)
+- [Руководство по тестированию](docs/testing.md)
+- [Физическая приёмка](docs/hardware-acceptance.md)
+- [UI/UX-исследование](docs/design/ux-research.md)
+- [Исторические аудиты](docs/audits/2026-07-26/)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
 
-Skills загружаются через официальный Codex app-server `skills/list` для
-текущего workspace, включая effective `enabled` и scope. При недоступности
-app-server после ограниченного timeout используется локальный scanner как
-деградированный fallback.
+## Участие в разработке
 
-Diagnostics показывает полный путь HID → mapping → назначение → bridge,
-режим захвата, состояние защиты ввода, источник runtime command catalog,
-наличие требуемых Electron API, недоступные функции, ошибки LED feature
-reports и доступный renderer-у текущий reasoning level. В JSON-экспорт
-добавлены версия и путь приложения, macOS/архитектура и структурированные
-счётчики обработки. Последний reasoning level является best-effort:
-если build или локализация не экспонирует состояние в DOM, UI честно
-показывает `Not exposed by renderer`.
+Перед изменениями прочитайте [`CONTRIBUTING.md`](CONTRIBUTING.md) и
+[`ARCHITECTURE.md`](ARCHITECTURE.md). Ошибки лучше оформлять через GitHub
+Issues с версиями macOS, ChatGPT и точной моделью устройства. Уязвимости
+следует сообщать по инструкции в [`SECURITY.md`](SECURITY.md), не публикуя
+чувствительные детали в обычном issue.
 
-Plugin binding вставляет официальный Markdown mention вида
-`[@Name](plugin://stable-uri)` и шаблон в активный composer без отправки.
-В build 5848 нет публичного renderer API для создания rich plugin node в
-существующем composer; поэтому визуальное превращение mention в chip
-остаётся поведением самого ChatGPT. Авторизация и workspace policy не
-обходятся.
+## Лицензия
 
-Физическая приёмка HID, LEDs и полного restart bridge должна выполняться
-вручную: автоматический тест не перезапускает текущий ChatGPT и не может
-достоверно проверить механику конкретного экземпляра Nostromo.
+Исходный код распространяется по лицензии [MIT](LICENSE). Заимствования и
+исследованные сторонние реализации перечислены в
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

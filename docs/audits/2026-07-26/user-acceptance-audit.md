@@ -1,5 +1,8 @@
 # Nostromo Codex — пользовательский и технический аудит
 
+> Исторический отчёт, superseded более поздними исправлениями и
+> [`automated-release-audit.md`](automated-release-audit.md).
+
 Дата: 2026-07-26  
 Среда: macOS 26.5.2 (25F84), arm64, Xcode 26.6, Swift 6.3.3, Node 26.0.0  
 Сборка ChatGPT: 26.721.41059 (5848), проверенный adapter  
@@ -153,7 +156,8 @@ profile row не добавляет `.help(profile.name)` или другой с
 4. **Long-name disclosure.** Добавить tooltip/help для sidebar и profile rows; покрыть
    очень длинные Cyrillic/Latin/emoji names визуальными тестами.
 5. После исправлений повторить полный runner и live UI. Затем отдельно выполнить
-   физическую и live-ChatGPT матрицу из `DeepTestReport.md`.
+   физическую и live-ChatGPT матрицу из
+   [`deep-test-report.md`](deep-test-report.md).
 
 ## Целостность после аудита
 

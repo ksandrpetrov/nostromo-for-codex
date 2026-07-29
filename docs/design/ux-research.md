@@ -127,4 +127,3 @@ Record completion, wrong-control selections, unintended actions, backtracking,
 requests for help, and qualitative comfort. The redesigned build is accepted
 only if all scenarios complete without an unintended external action and
 without documentation.
-

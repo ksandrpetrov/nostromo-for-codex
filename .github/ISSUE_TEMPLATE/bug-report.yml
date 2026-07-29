@@ -1,0 +1,74 @@
+name: Ошибка
+description: Воспроизводимый дефект Nostromo Codex
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Не публикуйте bridge tokens, пользовательскую конфигурацию и детали уязвимостей. Для security issues используйте SECURITY.md.
+  - type: input
+    id: revision
+    attributes:
+      label: Revision
+      description: Commit SHA или ветка, на которой воспроизводится проблема.
+      placeholder: 0123456789abcdef
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Окружение
+      description: Mac, macOS, ChatGPT version/build и модель устройства.
+      placeholder: Apple M…, macOS 26.…, ChatGPT 26.… (build …), Razer Nostromo RZ07-0049
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Область
+      options:
+        - Setup / permissions
+        - HID / клавиши / D-pad / колесо
+        - PTT / shortcuts
+        - Profiles / configuration
+        - Bridge / ChatGPT actions
+        - Lighting / LEDs
+        - UI / accessibility
+        - Build / tests / documentation
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      description: Минимальная последовательность без чувствительных данных.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое поведение
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Фактическое поведение
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Проверки и evidence
+      description: Число повторов, безопасные фрагменты логов, screenshots и способ восстановления.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Безопасность
+      options:
+        - label: Я удалил токены, персональные пути и пользовательские данные.
+          required: true
+        - label: Это не приватный security report.
+          required: true
