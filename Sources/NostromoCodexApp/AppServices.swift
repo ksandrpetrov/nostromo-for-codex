@@ -215,7 +215,18 @@ struct MacOSShortcutPoster: ShortcutPosting {
     }
 
     func requestPostEventAccess() -> Bool {
-        CGRequestPostEventAccess()
+        let granted = CGRequestPostEventAccess()
+        if !granted {
+            // macOS may not show its prompt again after an earlier denial.
+            // Always give the user a route to grant access to this app.
+            DispatchQueue.main.async {
+                let settingsURL = URL(
+                    string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"
+                )!
+                _ = NSWorkspace.shared.open(settingsURL)
+            }
+        }
+        return granted
     }
 
     func post(_ shortcut: ShortcutBinding, keyDown: Bool) -> Bool {
