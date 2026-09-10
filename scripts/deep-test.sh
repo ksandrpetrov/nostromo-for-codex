@@ -135,7 +135,7 @@ repeat_preload_smoke() {
   local iterations=$1
   integer iteration
   for (( iteration = 1; iteration <= iterations; iteration += 1 )); do
-    node "$smoke_file"
+    node "$smoke_file" || return $?
     print "preload smoke $iteration/$iterations"
   done
 }
