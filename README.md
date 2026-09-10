@@ -111,11 +111,29 @@ IORegistry и не открывает HID.
 
 ## Быстрый старт
 
+Для первого скачивания:
+
 ```sh
 git clone https://github.com/ksandrpetrov/nostromo-for-codex.git
 cd nostromo-for-codex
 ./scripts/build-app.sh release
 ```
+
+Если копия проекта уже существует, выполните в её папке:
+
+```sh
+git pull --ff-only
+./scripts/build-app.sh release
+```
+
+Клонирование требуется только при первом скачивании. Если Git сообщает
+`destination path ... already exists`, откройте существующую папку проекта
+и используйте команды обновления выше.
+
+Превью каталога интерфейса используют
+[`PreviewProvider`](https://developer.apple.com/documentation/swiftui/previewprovider/)
+только в debug-сборках. Сборка из терминала не требует плагина
+`PreviewsMacros` для этих превью.
 
 Сборка не запускает приложение и не открывает устройство. Следующая команда
 откроет Nostromo Codex; после завершения setup приложение сможет захватить

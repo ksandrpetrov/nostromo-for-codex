@@ -179,12 +179,18 @@ struct NostromoDesignSystemShowcase: View {
     }
 }
 
-#Preview("Design system — Light") {
-    NostromoDesignSystemShowcase()
-        .environment(\.colorScheme, .light)
+#if DEBUG
+// SwiftPM builds must not depend on Xcode's PreviewsMacros plugin.
+struct NostromoDesignSystemShowcase_Previews: PreviewProvider {
+    static var previews: some View {
+        Group {
+            NostromoDesignSystemShowcase()
+                .environment(\.colorScheme, .light)
+                .previewDisplayName("Design system — Light")
+            NostromoDesignSystemShowcase()
+                .environment(\.colorScheme, .dark)
+                .previewDisplayName("Design system — Dark")
+        }
+    }
 }
-
-#Preview("Design system — Dark") {
-    NostromoDesignSystemShowcase()
-        .environment(\.colorScheme, .dark)
-}
+#endif
