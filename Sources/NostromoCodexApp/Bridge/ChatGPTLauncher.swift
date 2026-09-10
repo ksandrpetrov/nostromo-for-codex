@@ -15,7 +15,7 @@ final class ChatGPTLauncher: @unchecked Sendable {
     static let bundleURL = URL(fileURLWithPath: "/Applications/ChatGPT.app", isDirectory: true)
     static let executableURL = bundleURL.appendingPathComponent("Contents/MacOS/ChatGPT")
     static let bundleIdentifier = "com.openai.codex"
-    static let supportedBuilds: Set<String> = ["5848"]
+    static let supportedBuilds: Set<String> = ["5848", "5973"]
 
     private let applicationLock = NSLock()
     private var launchedApplication: NSRunningApplication?
@@ -117,6 +117,7 @@ final class ChatGPTLauncher: @unchecked Sendable {
     func launch(
         preloadURL: URL,
         socketPath: String,
+        sessionDescriptorPath: String,
         token: String,
         forceUnsupported: Bool
     ) async throws {
@@ -133,6 +134,7 @@ final class ChatGPTLauncher: @unchecked Sendable {
         }
 
         var environment = ProcessInfo.processInfo.environment
+        environment["NOSTROMO_CODEX_DISCOVERY"] = sessionDescriptorPath
         environment["NOSTROMO_CODEX_SOCKET"] = socketPath
         environment["NOSTROMO_CODEX_TOKEN"] = token
         environment["NOSTROMO_CODEX_FORCE"] = forceUnsupported ? "1" : "0"

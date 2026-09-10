@@ -16,13 +16,24 @@ final class BridgeRuntimeDirectory: @unchecked Sendable {
 
     static let directoryPrefix = "nostromo-codex-runtime-"
     static let ownerMarkerFileName = ".owner"
+    static let discoveryDirectoryPrefix = "nostromo-codex-discovery-"
+    static let sessionDescriptorFileName = "session.json"
 
     private static let ownerMarkerVersion = 1
+    private static let sessionDescriptorVersion = 1
 
     private struct OwnerMarker: Codable, Equatable {
         let version: Int
         let pid: Int32
         let runtimeID: UUID
+    }
+
+    private struct SessionDescriptor: Codable, Equatable {
+        let version: Int
+        let pid: Int32
+        let runtimeID: UUID
+        let socketPath: String
+        let token: String
     }
 
     private struct DirectoryIdentity: Equatable {
@@ -34,15 +45,24 @@ final class BridgeRuntimeDirectory: @unchecked Sendable {
         case invalidOwnerPID
         case invalidRuntimeDirectory
         case invalidOwnerMarker
+        case invalidDiscoveryDirectory
+        case invalidSessionDescriptor
     }
 
     let url: URL
     let socketPath: String
+    let sessionDescriptorPath: String
 
     private let fileManager: FileManager
+    private let currentPID: Int32
+    private let currentUser: uid_t
+    private let runtimeID: UUID
     private let identity: DirectoryIdentity
+    private let discoveryURL: URL
+    private let discoveryIdentity: DirectoryIdentity
     private let cleanupLock = NSLock()
     private var removed = false
+    private var publishedDescriptor: SessionDescriptor?
 
     init(
         fileManager: FileManager,
@@ -59,6 +79,17 @@ final class BridgeRuntimeDirectory: @unchecked Sendable {
             fileManager: fileManager,
             currentPID: currentPID,
             processLiveness: processLiveness
+        )
+
+        let currentUser = Darwin.geteuid()
+        let discoveryURL = runtimeRoot.appendingPathComponent(
+            "\(Self.discoveryDirectoryPrefix)\(currentUser)",
+            isDirectory: true
+        )
+        let discoveryIdentity = try Self.prepareDiscoveryDirectory(
+            at: discoveryURL,
+            fileManager: fileManager,
+            expectedOwner: currentUser
         )
 
         // sockaddr_un.sun_path is only 104 bytes. /tmp keeps the complete
@@ -116,15 +147,93 @@ final class BridgeRuntimeDirectory: @unchecked Sendable {
         }
 
         self.fileManager = fileManager
+        self.currentPID = currentPID
+        self.currentUser = currentUser
+        self.runtimeID = runtimeID
         identity = directoryIdentity
+        self.discoveryURL = discoveryURL
+        self.discoveryIdentity = discoveryIdentity
         url = base
         socketPath = base.appendingPathComponent("project2077.sock").path
+        sessionDescriptorPath = discoveryURL
+            .appendingPathComponent(Self.sessionDescriptorFileName)
+            .path
+    }
+
+    func publishSession(token: String) throws {
+        cleanupLock.lock()
+        defer { cleanupLock.unlock() }
+        guard !removed, Self.isValidToken(token) else {
+            throw RuntimeDirectoryError.invalidSessionDescriptor
+        }
+        guard
+            let runtimeStatus = Self.itemStatus(at: url),
+            Self.isDirectory(runtimeStatus),
+            runtimeStatus.st_uid == currentUser,
+            Self.permissions(of: runtimeStatus) == 0o700,
+            Self.identity(of: runtimeStatus) == identity,
+            let discoveryStatus = Self.itemStatus(at: discoveryURL),
+            Self.isDirectory(discoveryStatus),
+            discoveryStatus.st_uid == currentUser,
+            Self.permissions(of: discoveryStatus) == 0o700,
+            Self.identity(of: discoveryStatus) == discoveryIdentity,
+            let socketStatus = Self.itemStatus(
+                at: URL(fileURLWithPath: socketPath)
+            ),
+            Self.isSocket(socketStatus),
+            socketStatus.st_uid == currentUser,
+            Self.permissions(of: socketStatus) == 0o600
+        else {
+            throw RuntimeDirectoryError.invalidSessionDescriptor
+        }
+
+        let descriptor = SessionDescriptor(
+            version: Self.sessionDescriptorVersion,
+            pid: currentPID,
+            runtimeID: runtimeID,
+            socketPath: socketPath,
+            token: token
+        )
+        let descriptorURL = URL(fileURLWithPath: sessionDescriptorPath)
+        let temporaryURL = discoveryURL.appendingPathComponent(
+            ".session-\(UUID().uuidString).tmp"
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        do {
+            try encoder.encode(descriptor).write(
+                to: temporaryURL,
+                options: [.withoutOverwriting]
+            )
+            try fileManager.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: temporaryURL.path
+            )
+            guard
+                Self.validSessionDescriptor(
+                    at: temporaryURL,
+                    expectedOwner: currentUser
+                ) == descriptor,
+                Darwin.rename(temporaryURL.path, descriptorURL.path) == 0,
+                Self.validSessionDescriptor(
+                    at: descriptorURL,
+                    expectedOwner: currentUser
+                ) == descriptor
+            else {
+                throw RuntimeDirectoryError.invalidSessionDescriptor
+            }
+            publishedDescriptor = descriptor
+        } catch {
+            try? fileManager.removeItem(at: temporaryURL)
+            throw error
+        }
     }
 
     func remove() {
         cleanupLock.lock()
         defer { cleanupLock.unlock() }
         guard !removed else { return }
+        unpublishSessionLocked()
         guard let status = Self.itemStatus(at: url) else { return }
         guard Self.identity(of: status) == identity else {
             removed = true
@@ -136,6 +245,30 @@ final class BridgeRuntimeDirectory: @unchecked Sendable {
         } catch {
             // A later idempotent stop may retry a transient filesystem error.
         }
+    }
+
+    private func unpublishSessionLocked() {
+        guard let publishedDescriptor else { return }
+        defer { self.publishedDescriptor = nil }
+        guard
+            let discoveryStatus = Self.itemStatus(at: discoveryURL),
+            Self.isDirectory(discoveryStatus),
+            discoveryStatus.st_uid == currentUser,
+            Self.permissions(of: discoveryStatus) == 0o700,
+            Self.identity(of: discoveryStatus) == discoveryIdentity
+        else {
+            return
+        }
+        let descriptorURL = URL(fileURLWithPath: sessionDescriptorPath)
+        guard
+            Self.validSessionDescriptor(
+                at: descriptorURL,
+                expectedOwner: currentUser
+            ) == publishedDescriptor
+        else {
+            return
+        }
+        try? fileManager.removeItem(at: descriptorURL)
     }
 
     static func defaultProcessLiveness(_ pid: Int32) -> OwnerProcessLiveness {
@@ -151,6 +284,32 @@ final class BridgeRuntimeDirectory: @unchecked Sendable {
         default:
             return .unknown
         }
+    }
+
+    private static func prepareDiscoveryDirectory(
+        at url: URL,
+        fileManager: FileManager,
+        expectedOwner: uid_t
+    ) throws -> DirectoryIdentity {
+        let created = Darwin.mkdir(url.path, 0o700) == 0
+        if !created, errno != EEXIST {
+            throw RuntimeDirectoryError.invalidDiscoveryDirectory
+        }
+        if created {
+            try fileManager.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: url.path
+            )
+        }
+        guard
+            let status = itemStatus(at: url),
+            isDirectory(status),
+            status.st_uid == expectedOwner,
+            permissions(of: status) == 0o700
+        else {
+            throw RuntimeDirectoryError.invalidDiscoveryDirectory
+        }
+        return identity(of: status)
     }
 
     private static func removeStaleDirectories(
@@ -252,6 +411,41 @@ final class BridgeRuntimeDirectory: @unchecked Sendable {
         return marker
     }
 
+    private static func validSessionDescriptor(
+        at descriptorURL: URL,
+        expectedOwner: uid_t
+    ) -> SessionDescriptor? {
+        guard
+            let status = itemStatus(at: descriptorURL),
+            isRegularFile(status),
+            status.st_uid == expectedOwner,
+            permissions(of: status) == 0o600,
+            status.st_nlink == 1,
+            status.st_size > 0,
+            status.st_size <= 4_096,
+            let data = try? Data(contentsOf: descriptorURL),
+            let descriptor = try? JSONDecoder().decode(
+                SessionDescriptor.self,
+                from: data
+            ),
+            descriptor.version == sessionDescriptorVersion,
+            descriptor.pid > 0,
+            isValidToken(descriptor.token)
+        else {
+            return nil
+        }
+        return descriptor
+    }
+
+    private static func isValidToken(_ token: String) -> Bool {
+        token.utf8.count == 64
+            && token.utf8.allSatisfy { byte in
+                (48 ... 57).contains(byte)
+                    || (65 ... 70).contains(byte)
+                    || (97 ... 102).contains(byte)
+            }
+    }
+
     private static func itemStatus(at url: URL) -> stat? {
         var status = stat()
         guard Darwin.lstat(url.path, &status) == 0 else { return nil }
@@ -264,6 +458,10 @@ final class BridgeRuntimeDirectory: @unchecked Sendable {
 
     private static func isRegularFile(_ status: stat) -> Bool {
         status.st_mode & S_IFMT == S_IFREG
+    }
+
+    private static func isSocket(_ status: stat) -> Bool {
+        status.st_mode & S_IFMT == S_IFSOCK
     }
 
     private static func permissions(of status: stat) -> mode_t {

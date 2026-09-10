@@ -508,6 +508,8 @@ public enum CodexActionExecution: Hashable, Sendable {
     case stopActive
     case submitActiveComposer
     case toggleChatWorkMode
+    case insertComposerText(String)
+    case clearComposerProject
 }
 
 public enum CodexActionCatalog {
@@ -529,7 +531,7 @@ public enum CodexActionCatalog {
         .init(
             id: "composer.openPermissions",
             title: "Разрешения",
-            detail: "В сборке 5848 нет проверенного идентификатора команды для этого окна",
+            detail: "В проверенных сборках нет идентификатора команды для этого окна",
             category: .mode,
             available: false
         ),
@@ -550,7 +552,23 @@ public enum CodexActionCatalog {
         .init(id: "openBrowserTab", title: "Браузер", detail: "Открыть браузер Codex", category: .panels),
         .init(id: "composer.addFiles", title: "Прикрепить файлы", detail: "Открыть выбор файлов", category: .context),
         .init(id: "composer.addPhotos", title: "Прикрепить фото", detail: "Открыть выбор фотографий", category: .context),
+        .init(
+            id: "composer.openSkillPicker",
+            title: "Список навыков",
+            detail: "Вставить $ и открыть список доступных навыков",
+            category: .context,
+            execution: .insertComposerText("$"),
+            requiresRuntimeRegistration: false
+        ),
         .init(id: "openFolder", title: "Открыть папку", detail: "Выбрать папку рабочей области", category: .workspace),
+        .init(
+            id: "composer.clearProject",
+            title: "Работать без проекта",
+            detail: "Убрать выбранный проект из нового чата",
+            category: .workspace,
+            execution: .clearComposerProject,
+            requiresRuntimeRegistration: false
+        ),
         .init(id: "environmentAction1", title: "Запустить действие среды", detail: "Запустить основное действие проекта", category: .workspace),
         .init(id: "git.commit", title: "Коммит", detail: "Открыть действие создания коммита", category: .workspace, consequential: true),
         .init(id: "git.createPullRequest", title: "Создать PR", detail: "Создать запрос на слияние", category: .workspace, consequential: true),

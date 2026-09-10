@@ -38,10 +38,14 @@ slots через `BridgeWireCodec` в `AppModel`, после чего обнов
   read-back. `AppModel` вызывает suppressor только с MainActor.
 - `UnixSocketBridge` владеет descriptor lifecycle и backpressure. Он
   одноразовый: после terminal stop повторный start является no-op.
-- `BridgeRuntimeDirectory` создаёт scope `0700`, marker/socket `0600` и
-  удаляет только каталог с повторно подтверждённой identity.
+- `BridgeRuntimeDirectory` создаёт per-process scope `0700`, marker/socket
+  `0600` и стабильный per-user discovery scope `0700`. После `listen` он
+  атомарно публикует session descriptor `0600`, а при остановке удаляет его
+  только если descriptor всё ещё принадлежит этому процессу.
 - `BridgeWireCodec` является чистой границей protocol v2 и не владеет I/O.
-- preload dependency-free, compatibility-gated и никогда не изменяет
+- preload dependency-free, compatibility-gated, проверяет owner/permissions
+  discovery descriptor и автоматически переподключает существующий
+  виртуальный HID с ограниченным exponential backoff. Он никогда не изменяет
   `ChatGPT.app`.
 
 ## Контракты, которые меняются вместе
@@ -77,6 +81,9 @@ invariants отклоняются.
   отсутствие обязательных private modules.
 - Старые runtime directories удаляются только для доказанно мёртвого PID и
   после повторной проверки owner marker/inode.
+- Discovery descriptor принимается только вместе с совпадающим owner marker,
+  приватными `0700`/`0600`, ожидаемым socket path и повторной token-
+  аутентификацией; устаревший процесс не удаляет descriptor нового сеанса.
 - После terminal bridge stop не публикуются `.listening`, `.connected` или
   `.failed`.
 

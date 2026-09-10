@@ -18,6 +18,41 @@ enum NostromoDeviceState: Equatable {
 }
 
 enum HIDManagerOpenPolicy {
+    struct Result {
+        let status: IOReturn
+        let seized: Bool
+        let exclusiveFailure: IOReturn?
+    }
+
+    static func open(
+        requestedSeize: Bool,
+        attempt: (IOOptionBits) -> IOReturn,
+        replacePartiallyOpenedManager: () -> Void
+    ) -> Result {
+        let initialStatus = attempt(
+            requestedSeize
+                ? IOOptionBits(kIOHIDOptionsTypeSeizeDevice)
+                : IOOptionBits(kIOHIDOptionsTypeNone)
+        )
+        guard shouldRetryWithoutSeizing(
+            requestedSeize: requestedSeize,
+            status: initialStatus
+        ) else {
+            return Result(
+                status: initialStatus,
+                seized: requestedSeize && initialStatus == kIOReturnSuccess,
+                exclusiveFailure: nil
+            )
+        }
+
+        replacePartiallyOpenedManager()
+        return Result(
+            status: attempt(IOOptionBits(kIOHIDOptionsTypeNone)),
+            seized: false,
+            exclusiveFailure: initialStatus
+        )
+    }
+
     static func shouldRetryWithoutSeizing(
         requestedSeize: Bool,
         status: IOReturn
@@ -190,53 +225,34 @@ final class NostromoHIDManager: @unchecked Sendable {
                 }
             }
 
-            let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-            self.manager = manager
-            self.managerIdentity = UInt(
-                bitPattern: Unmanaged.passUnretained(manager).toOpaque()
-            )
             self.running = true
-            let matching: [String: Any] = [
-                kIOHIDVendorIDKey as String: Self.vendorID,
-                kIOHIDProductIDKey as String: Self.productID,
-            ]
-            IOHIDManagerSetDeviceMatching(manager, matching as CFDictionary)
-            let pointer = Unmanaged.passUnretained(self).toOpaque()
-            IOHIDManagerRegisterDeviceMatchingCallback(manager, deviceMatchedCallback, pointer)
-            IOHIDManagerRegisterDeviceRemovalCallback(manager, deviceRemovedCallback, pointer)
-            IOHIDManagerRegisterInputValueCallback(manager, inputValueCallback, pointer)
-            IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+            var manager = self.makeConfiguredManagerOnQueue()
 
-            let openOptions = self.seize
-                ? IOOptionBits(kIOHIDOptionsTypeSeizeDevice)
-                : IOOptionBits(kIOHIDOptionsTypeNone)
-            var status = IOHIDManagerOpen(manager, openOptions)
-            if HIDManagerOpenPolicy.shouldRetryWithoutSeizing(
+            let openResult = HIDManagerOpenPolicy.open(
                 requestedSeize: self.seize,
-                status: status
-            ) {
+                attempt: { options in
+                    IOHIDManagerOpen(manager, options)
+                },
+                replacePartiallyOpenedManager: {
+                    self.closeManagerOnQueue(manager)
+                    self.devices.removeAll()
+                    self.featureDevices.removeAll()
+                    manager = self.makeConfiguredManagerOnQueue()
+                }
+            )
+            if let exclusiveFailure = openResult.exclusiveFailure {
                 self.onDiagnostic?(
-                    "macOS запретила эксклюзивный HID-захват (\(status)); "
+                    "macOS запретила эксклюзивный HID-захват (\(exclusiveFailure)); "
                         + "продолжаем в обычном режиме чтения."
                 )
-                status = IOHIDManagerOpen(
-                    manager,
-                    IOOptionBits(kIOHIDOptionsTypeNone)
-                )
-                if status == kIOReturnSuccess {
-                    self.seize = false
-                }
             }
+            let status = openResult.status
+            self.seize = openResult.seized
             if status != kIOReturnSuccess {
                 self.running = false
                 self.devices.removeAll()
                 self.featureDevices.removeAll()
-                IOHIDManagerUnscheduleFromRunLoop(
-                    manager,
-                    CFRunLoopGetMain(),
-                    CFRunLoopMode.commonModes.rawValue
-                )
-                IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+                self.closeManagerOnQueue(manager)
                 self.manager = nil
                 self.managerIdentity = 0
                 self.onState?(.error(Self.openErrorMessage(status)))
@@ -402,6 +418,53 @@ final class NostromoHIDManager: @unchecked Sendable {
         UInt(bitPattern: Unmanaged.passUnretained(device).toOpaque())
     }
 
+    private func makeConfiguredManagerOnQueue() -> IOHIDManager {
+        let manager = IOHIDManagerCreate(
+            kCFAllocatorDefault,
+            IOOptionBits(kIOHIDOptionsTypeNone)
+        )
+        self.manager = manager
+        managerIdentity = UInt(
+            bitPattern: Unmanaged.passUnretained(manager).toOpaque()
+        )
+        let matching: [String: Any] = [
+            kIOHIDVendorIDKey as String: Self.vendorID,
+            kIOHIDProductIDKey as String: Self.productID,
+        ]
+        IOHIDManagerSetDeviceMatching(manager, matching as CFDictionary)
+        let pointer = Unmanaged.passUnretained(self).toOpaque()
+        IOHIDManagerRegisterDeviceMatchingCallback(
+            manager,
+            deviceMatchedCallback,
+            pointer
+        )
+        IOHIDManagerRegisterDeviceRemovalCallback(
+            manager,
+            deviceRemovedCallback,
+            pointer
+        )
+        IOHIDManagerRegisterInputValueCallback(
+            manager,
+            inputValueCallback,
+            pointer
+        )
+        IOHIDManagerScheduleWithRunLoop(
+            manager,
+            CFRunLoopGetMain(),
+            CFRunLoopMode.commonModes.rawValue
+        )
+        return manager
+    }
+
+    private func closeManagerOnQueue(_ manager: IOHIDManager) {
+        IOHIDManagerUnscheduleFromRunLoop(
+            manager,
+            CFRunLoopGetMain(),
+            CFRunLoopMode.commonModes.rawValue
+        )
+        IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+    }
+
     private func stopOnQueue() {
         running = false
         devices.removeAll()
@@ -413,8 +476,7 @@ final class NostromoHIDManager: @unchecked Sendable {
         lightingEffects.pressStrength = nil
         lastLightingRender = nil
         if let manager {
-            IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
-            IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+            closeManagerOnQueue(manager)
         }
         manager = nil
         managerIdentity = 0

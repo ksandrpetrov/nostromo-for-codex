@@ -23,6 +23,30 @@ final class CodexActionCatalogTests: XCTestCase {
         }
     }
 
+    func testSkillPickerActionIsAvailableWithoutDesktopCommandRegistration() throws {
+        let descriptor = try XCTUnwrap(
+            CodexActionCatalog.runtimeCatalog(commandIDs: []).first {
+                $0.id == "composer.openSkillPicker"
+            }
+        )
+
+        XCTAssertEqual(descriptor.title, "Список навыков")
+        XCTAssertTrue(descriptor.available)
+        XCTAssertFalse(descriptor.requiresRuntimeRegistration)
+    }
+
+    func testClearProjectActionIsAvailableWithoutDesktopCommandRegistration() throws {
+        let descriptor = try XCTUnwrap(
+            CodexActionCatalog.runtimeCatalog(commandIDs: []).first {
+                $0.id == "composer.clearProject"
+            }
+        )
+
+        XCTAssertEqual(descriptor.title, "Работать без проекта")
+        XCTAssertTrue(descriptor.available)
+        XCTAssertFalse(descriptor.requiresRuntimeRegistration)
+    }
+
     func testExecutionAndRiskMetadataCentralizeSpecialActionBehavior() {
         let byID = Dictionary(
             uniqueKeysWithValues: CodexActionCatalog.verified.map { ($0.id, $0) }
@@ -34,6 +58,14 @@ final class CodexActionCatalogTests: XCTestCase {
         XCTAssertEqual(
             byID["composer.toggleChatWorkMode"]?.execution,
             .toggleChatWorkMode
+        )
+        XCTAssertEqual(
+            byID["composer.openSkillPicker"]?.execution,
+            .insertComposerText("$")
+        )
+        XCTAssertEqual(
+            byID["composer.clearProject"]?.execution,
+            .clearComposerProject
         )
         XCTAssertEqual(byID["settings"]?.execution, .runtimeCommand)
 

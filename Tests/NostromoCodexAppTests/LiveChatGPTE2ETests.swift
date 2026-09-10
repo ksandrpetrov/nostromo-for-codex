@@ -46,8 +46,8 @@ final class LiveChatGPTE2ETests: XCTestCase {
         }
 
         let compatibility = launcher.compatibility()
-        XCTAssertEqual(compatibility.version, "26.721.41059")
-        XCTAssertEqual(compatibility.build, "5848")
+        XCTAssertEqual(compatibility.version, "26.721.81911")
+        XCTAssertEqual(compatibility.build, "5973")
         XCTAssertTrue(compatibility.supported)
         XCTAssertTrue(compatibility.requiredModulesPresent)
 
@@ -64,6 +64,7 @@ final class LiveChatGPTE2ETests: XCTestCase {
         try await launcher.launch(
             preloadURL: preload,
             socketPath: bridge.socketPath,
+            sessionDescriptorPath: bridge.sessionDescriptorPath,
             token: bridge.token,
             forceUnsupported: false
         )
@@ -83,9 +84,9 @@ final class LiveChatGPTE2ETests: XCTestCase {
         XCTAssertEqual(
             Set(capabilities.unavailableFeatures),
             [
-                "Окно разрешений не зарегистрировано в сборке ChatGPT 5848.",
-                "Команда Compact не зарегистрирована как команда приложения в сборке ChatGPT 5848.",
-                "Команда Status не зарегистрирована как команда приложения в сборке ChatGPT 5848.",
+                "Окно разрешений не зарегистрировано в проверенной сборке ChatGPT.",
+                "Команда Compact не зарегистрирована как команда приложения в проверенной сборке ChatGPT.",
+                "Команда Status не зарегистрирована как команда приложения в проверенной сборке ChatGPT.",
             ]
         )
 
@@ -279,6 +280,7 @@ private final class ObservingBridge: BridgeServing, @unchecked Sendable {
     }
 
     var socketPath: String { underlying.socketPath }
+    var sessionDescriptorPath: String { underlying.sessionDescriptorPath }
     var token: String { underlying.token }
     var isAuthenticated: Bool { underlying.isAuthenticated }
 

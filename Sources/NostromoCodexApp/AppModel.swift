@@ -147,7 +147,6 @@ final class AppModel: ObservableObject {
     let keyboardSuppressor: any NostromoKeyboardSuppressing
     let engine: Project2077Engine
     let hidOnlyMode: Bool
-    private let hudPresenter: any RuntimeHUDPresenting
 
     // MARK: Runtime coordination state
 
@@ -190,7 +189,6 @@ final class AppModel: ObservableObject {
         keyboardSuppressor: any NostromoKeyboardSuppressing =
             NostromoKeyboardSuppressor(),
         preferences: AppPreferences = .ephemeral(),
-        hudPresenter: any RuntimeHUDPresenting = NoopRuntimeHUDPresenter(),
         hidOnlyMode: Bool = ProcessInfo.processInfo.environment["NOSTROMO_CODEX_HID_ONLY"] == "1"
     ) {
         self.preferences = preferences
@@ -199,7 +197,6 @@ final class AppModel: ObservableObject {
         self.hid = hid
         self.shortcutPoster = shortcutPoster
         self.keyboardSuppressor = keyboardSuppressor
-        self.hudPresenter = hudPresenter
         self.hidOnlyMode = hidOnlyMode
         let loadedConfiguration: AppConfiguration
         do {
@@ -343,9 +340,9 @@ final class AppModel: ObservableObject {
 
         if taskSlots.contains(where: {
             switch $0.status {
-            case .awaitingApproval, .awaitingResponse, .error:
+            case .awaitingApproval, .error:
                 true
-            case .off, .working, .unread, .idle:
+            case .off, .working, .unread, .idle, .awaitingResponse:
                 false
             }
         }) {
@@ -595,6 +592,7 @@ final class AppModel: ObservableObject {
             try await launcher.launch(
                 preloadURL: preload,
                 socketPath: bridge.socketPath,
+                sessionDescriptorPath: bridge.sessionDescriptorPath,
                 token: bridge.token,
                 forceUnsupported: configuration.forceUnsupportedChatGPT
             )
@@ -729,13 +727,6 @@ final class AppModel: ObservableObject {
 
     func setAutoLaunchChatGPT(_ enabled: Bool) {
         preferences.autoLaunchChatGPT = enabled
-    }
-
-    func setRuntimeHUDEnabled(_ enabled: Bool) {
-        preferences.showRuntimeHUD = enabled
-        if !enabled {
-            hudPresenter.dismiss()
-        }
     }
 
     // MARK: Presentation and lighting
@@ -1078,7 +1069,6 @@ final class AppModel: ObservableObject {
         if runtimeFeedback?.kind == .voice {
             runtimeFeedback = nil
             hudMessage = nil
-            hudPresenter.dismiss()
         }
     }
 
@@ -1542,6 +1532,16 @@ final class AppModel: ObservableObject {
                     .toggleChatWorkMode,
                     successHUD: "Режим Chat / Work переключён"
                 )
+            case let .insertComposerText(text):
+                dispatchBridgeAction(
+                    .insertComposerText(text: text),
+                    successHUD: "Список навыков открыт"
+                )
+            case .clearComposerProject:
+                dispatchBridgeAction(
+                    .clearComposerProject,
+                    successHUD: "Проект убран"
+                )
             }
         case let .skill(skill):
             guard pressed else { return }
@@ -1843,9 +1843,6 @@ final class AppModel: ObservableObject {
         hudTask?.cancel()
         hudMessage = feedback.message
         runtimeFeedback = feedback
-        if preferences.showRuntimeHUD {
-            hudPresenter.present(feedback)
-        }
         guard !feedback.persistent else { return }
         hudTask = Task {
             try? await Task.sleep(for: .milliseconds(1_450))
@@ -1873,7 +1870,6 @@ final class AppModel: ObservableObject {
         } else {
             if runtimeFeedback?.kind == .error {
                 runtimeFeedback = nil
-                hudPresenter.dismiss()
             }
         }
     }

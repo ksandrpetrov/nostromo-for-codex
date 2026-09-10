@@ -10,7 +10,7 @@ const preloadPath = path.resolve(
   "../Sources/NostromoCodexApp/Resources/chatgpt-preload.cjs",
 );
 
-process.env.NOSTROMO_CODEX_CHATGPT_VERSION = "26.721.41059";
+process.env.NOSTROMO_CODEX_CHATGPT_VERSION = "26.721.81911";
 process.env.NOSTROMO_CODEX_TEST_EXPORTS = "1";
 const preload = require(preloadPath);
 const bridgeActionManifest = JSON.parse(fs.readFileSync(
