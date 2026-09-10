@@ -154,6 +154,38 @@ protocol NostromoKeyboardServicePropertyAccessing: AnyObject {
 final class IOKitNostromoKeyboardServicePropertyAccess:
     NostromoKeyboardServicePropertyAccessing
 {
+    private let makeSession: () -> any NostromoKeyboardServicePropertyAccessing
+    private var session: (any NostromoKeyboardServicePropertyAccessing)?
+
+    init(
+        makeSession: @escaping () -> any NostromoKeyboardServicePropertyAccessing = {
+            IOKitNostromoKeyboardServiceSession()
+        }
+    ) {
+        self.makeSession = makeSession
+    }
+
+    func targetKeyboardServices() -> [NostromoKeyboardServiceIdentity] {
+        // Simple clients are not scheduled for hot-plug notifications. Use a
+        // fresh client for each enumeration, then retain that session for the
+        // complete snapshot/write/read-back/rollback transaction.
+        session = makeSession()
+        return session?.targetKeyboardServices() ?? []
+    }
+
+    func copyMapping(registryID: UInt64) -> AnyObject? {
+        session?.copyMapping(registryID: registryID)
+    }
+
+    func setMapping(registryID: UInt64, property: AnyObject) -> Bool {
+        session?.setMapping(registryID: registryID, property: property) ?? false
+    }
+}
+
+@MainActor
+private final class IOKitNostromoKeyboardServiceSession:
+    NostromoKeyboardServicePropertyAccessing
+{
     private let client: IOHIDEventSystemClient
     private var servicesByRegistryID: [UInt64: IOHIDServiceClient] = [:]
 

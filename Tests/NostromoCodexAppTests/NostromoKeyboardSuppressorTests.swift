@@ -273,6 +273,46 @@ final class NostromoKeyboardSuppressorTests: XCTestCase {
         )
     }
 
+    func testServiceRefreshDropsDisconnectedRegistryIDAndUsesNewSession() {
+        let oldSession = FakeKeyboardServiceAccess(
+            services: [targetService(registryID: 101)],
+            mappings: [101: mapping(sourceUsage: 0x14, destinationUsage: 0x04)]
+        )
+        let newSession = FakeKeyboardServiceAccess(
+            services: [targetService(registryID: 102)],
+            mappings: [102: mapping(sourceUsage: 0x14, destinationUsage: 0x05)]
+        )
+        var sessions = [oldSession, newSession]
+        let access = IOKitNostromoKeyboardServicePropertyAccess {
+            sessions.removeFirst()
+        }
+
+        XCTAssertEqual(access.targetKeyboardServices().map(\.registryID), [101])
+        XCTAssertEqual(access.targetKeyboardServices().map(\.registryID), [102])
+        XCTAssertNil(access.copyMapping(registryID: 101))
+        XCTAssertFalse(access.setMapping(registryID: 101, property: NSArray()))
+        XCTAssertTrue(access.setMapping(registryID: 102, property: NSArray()))
+        XCTAssertTrue(oldSession.setCalls.isEmpty)
+        XCTAssertEqual(newSession.setCalls.map(\.registryID), [102])
+    }
+
+    func testEmptyServiceRefreshCannotReusePreviousServiceForWrites() {
+        let oldSession = FakeKeyboardServiceAccess(
+            services: [targetService(registryID: 101)],
+            mappings: [:]
+        )
+        let emptySession = FakeKeyboardServiceAccess(services: [], mappings: [:])
+        var sessions = [oldSession, emptySession]
+        let access = IOKitNostromoKeyboardServicePropertyAccess {
+            sessions.removeFirst()
+        }
+
+        XCTAssertEqual(access.targetKeyboardServices().count, 1)
+        XCTAssertTrue(access.targetKeyboardServices().isEmpty)
+        XCTAssertFalse(access.setMapping(registryID: 101, property: NSArray()))
+        XCTAssertTrue(oldSession.setCalls.isEmpty)
+    }
+
     func testPartialApplyRollsBackEveryServiceAndConsumesMarker() {
         let originalOne = mapping(
             sourceUsage: 0x14,
@@ -516,6 +556,9 @@ private final class FakeKeyboardServiceAccess:
         registryID: UInt64,
         property: AnyObject
     ) -> Bool {
+        guard services.contains(where: { $0.registryID == registryID }) else {
+            return false
+        }
         setCalls.append((registryID, property))
         let behavior: SetBehavior
         if var queued = setBehaviors[registryID], !queued.isEmpty {

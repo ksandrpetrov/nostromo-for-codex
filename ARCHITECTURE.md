@@ -24,6 +24,9 @@ slots через `BridgeWireCodec` в `AppModel`, после чего обнов
 
 ## Владельцы состояния
 
+- `NostromoInstanceLock` получает process lease до создания `AppModel`.
+  Второй экземпляр приложения не открывает HID и не читает recovery marker.
+  Lock снимается ядром при завершении процесса, файл не удаляется.
 - `AppModel` координирует UI и сервисы на MainActor. Он не должен содержать
   POSIX, IOHID или JSON-framing детали.
 - `ProfileRuntimeState` владеет persistent profile ID и transient
@@ -36,6 +39,9 @@ slots через `BridgeWireCodec` в `AppModel`, после чего обнов
   recovery marker. Marker всей партии атомарно сохраняется до первой записи;
   применение, rollback и восстановление считаются успешными только после
   read-back. `AppModel` вызывает suppressor только с MainActor.
+  Каждое перечисление HID-сервисов открывает новую simple-client сессию,
+  которая живёт до следующей транзакции. Старые registry ID не переживают
+  переподключение внутри кэша доступа к свойствам.
 - `UnixSocketBridge` владеет descriptor lifecycle и backpressure. Он
   одноразовый: после terminal stop повторный start является no-op.
 - `BridgeRuntimeDirectory` создаёт per-process scope `0700`, marker/socket
@@ -90,6 +96,9 @@ invariants отклоняются.
 - Momentary profile никогда не заменяет persistent active profile на диске.
 - Неизвестная ChatGPT build блокируется; expert override не обходит
   отсутствие обязательных private modules.
+- Перезапуск ChatGPT проверяет совместимость, мост и preload до закрытия
+  приложения. При ошибке повторного запуска открывает обычный ChatGPT,
+  сохраняя диагностику ошибки моста. Shutdown отменяет повторный запуск.
 - При недоступности приватного моста доступны только явно перечисленные в
   metadata каталога базовые команды. Удержанные при смене соединения кнопки
   требуют отпускания; старые события и результаты не повторяются через резерв.

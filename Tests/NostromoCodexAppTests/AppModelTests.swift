@@ -60,6 +60,51 @@ final class AppModelTests: XCTestCase {
         XCTAssertNotNil(fixture.model.lastError)
     }
 
+    func testRestartWithUnavailableBridgePreservesRunningApplication() async {
+        let fixture = makeFixture()
+        fixture.bridge.onStatus?(.failed("Socket unavailable"))
+        await settle()
+
+        fixture.model.restartThroughNostromo()
+        await settle()
+
+        XCTAssertEqual(fixture.launcher.terminateCalls, 0)
+        XCTAssertEqual(fixture.launcher.launchCalls, 0)
+        XCTAssertTrue(fixture.launcher.isRunning())
+        XCTAssertNotNil(fixture.model.lastError)
+    }
+
+    func testFailedBridgeRestartReopensCodexNormally() async {
+        let fixture = makeFixture()
+        await settle()
+        fixture.launcher.failLaunch(with: .launchFailed)
+
+        fixture.model.restartThroughNostromo()
+        let reopened = await waitUntil { fixture.launcher.normalLaunchCalls == 1 }
+
+        XCTAssertTrue(reopened)
+        XCTAssertEqual(fixture.launcher.terminateCalls, 1)
+        XCTAssertEqual(fixture.launcher.launchCalls, 1)
+        XCTAssertTrue(fixture.launcher.isRunning())
+        XCTAssertTrue(fixture.model.chatGPTNeedsRestart)
+        XCTAssertNotNil(fixture.model.lastError)
+    }
+
+    func testShutdownDuringFailedRestartDoesNotReopenCodex() async {
+        let fixture = makeFixture()
+        await settle()
+        fixture.launcher.failLaunch(with: .launchFailed, delay: .milliseconds(100))
+
+        fixture.model.restartThroughNostromo()
+        let launchStarted = await waitUntil { fixture.launcher.launchCalls == 1 }
+        XCTAssertTrue(launchStarted)
+        fixture.model.shutdown()
+        try? await Task.sleep(for: .milliseconds(130))
+
+        XCTAssertEqual(fixture.launcher.normalLaunchCalls, 0)
+        XCTAssertFalse(fixture.launcher.isRunning())
+    }
+
     func testInstallationChangeInvalidatesOldCapabilitiesWithoutEditingProfiles() async {
         let fixture = makeFixture()
         await settle()
@@ -1943,10 +1988,22 @@ private final class FakeLauncher: ChatGPTLaunching, @unchecked Sendable {
     private var activeStorage = false
     private var launchCountStorage = 0
     private var terminateCountStorage = 0
+    private var normalLaunchCountStorage = 0
+    private var runningStorage = true
+    private var launchFailure: LaunchError?
+    private var launchDelay: Duration?
     private var compatibilityStorage = ChatGPTCompatibility(version: "26.721.41059", build: "5848", supported: true)
 
     func setCompatibility(_ value: ChatGPTCompatibility) { lock.withLock { compatibilityStorage = value } }
     func installationIdentifier() -> String { lock.withLock { compatibilityStorage.version + compatibilityStorage.build } }
+
+    func failLaunch(with error: LaunchError, delay: Duration? = nil) {
+        lock.withLock {
+            launchFailure = error
+            launchDelay = delay
+        }
+    }
+    var normalLaunchCalls: Int { lock.withLock { normalLaunchCountStorage } }
 
     var launchCalls: Int {
         lock.lock()
@@ -1968,7 +2025,7 @@ private final class FakeLauncher: ChatGPTLaunching, @unchecked Sendable {
         lock.withLock { compatibilityStorage }
     }
 
-    func isRunning() -> Bool { true }
+    func isRunning() -> Bool { lock.withLock { runningStorage } }
 
     func isActive() -> Bool {
         lock.withLock { activeStorage }
@@ -1989,14 +2046,28 @@ private final class FakeLauncher: ChatGPTLaunching, @unchecked Sendable {
         token _: String,
         forceUnsupported _: Bool
     ) async throws {
-        lock.withLock {
+        let delay = lock.withLock {
             launchCountStorage += 1
+            return launchDelay
+        }
+        if let delay { try await Task.sleep(for: delay) }
+        try lock.withLock {
+            if let launchFailure { throw launchFailure }
+            runningStorage = true
+        }
+    }
+
+    func launchNormally() async throws {
+        lock.withLock {
+            normalLaunchCountStorage += 1
+            runningStorage = true
         }
     }
 
     func terminateRunningApplications() async {
         lock.withLock {
             terminateCountStorage += 1
+            runningStorage = false
         }
     }
 }

@@ -620,11 +620,50 @@ final class AppModel: ObservableObject {
             report(error)
             return
         }
+        guard bridgeStatus == .listening || bridgeStatus == .connected else {
+            reportMessage("Приватное подключение ещё не готово. Повторите попытку через несколько секунд.")
+            return
+        }
+        guard let preload = preloadURL() else {
+            reportMessage("Встроенный адаптер ChatGPT отсутствует.")
+            return
+        }
+        let forceUnsupported = configuration.forceUnsupportedChatGPT
         launchInProgress = true
         Task {
+            defer { launchInProgress = false }
             await launcher.terminateRunningApplications()
-            launchInProgress = false
-            await launchChatGPTNow()
+            guard !shuttingDown else { return }
+            do {
+                try await launcher.launch(
+                    preloadURL: preload,
+                    socketPath: bridge.socketPath,
+                    sessionDescriptorPath: bridge.sessionDescriptorPath,
+                    token: bridge.token,
+                    forceUnsupported: forceUnsupported
+                )
+                chatGPTNeedsRestart = false
+            } catch {
+                guard !shuttingDown else { return }
+                let bridgeError = error.localizedDescription
+                guard !launcher.isRunning() else {
+                    report(error)
+                    return
+                }
+                do {
+                    try await launcher.launchNormally()
+                    chatGPTNeedsRestart = true
+                    reportMessage(
+                        "ChatGPT открыт в обычном режиме. Подключение Nostromo "
+                            + "не удалось: \(bridgeError)"
+                    )
+                } catch {
+                    reportMessage(
+                        "Не удалось открыть ChatGPT после перезапуска: "
+                            + "\(error.localizedDescription) Подключение Nostromo: \(bridgeError)"
+                    )
+                }
+            }
         }
     }
 

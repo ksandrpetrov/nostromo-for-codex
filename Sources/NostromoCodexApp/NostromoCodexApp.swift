@@ -3,6 +3,7 @@ import SwiftUI
 
 @MainActor
 final class NostromoApplicationDelegate: NSObject, NSApplicationDelegate {
+    static var instanceLock: NostromoInstanceLock?
     static var terminationHandler: (() -> Void)?
     static var didBecomeActiveHandler: (() -> Void)?
     static var statusItemController: NostromoStatusItemController?
@@ -104,6 +105,21 @@ struct NostromoCodexApp: App {
     @StateObject private var model: AppModel
 
     init() {
+        do {
+            NostromoApplicationDelegate.instanceLock = try NostromoInstanceLock.acquireForApplication()
+        } catch NostromoInstanceLock.Failure.alreadyRunning {
+            NSRunningApplication.runningApplications(
+                withBundleIdentifier: "dev.aleksandr.nostromo-codex"
+            ).first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier })?
+                .activate(options: [.activateAllWindows])
+            exit(EXIT_SUCCESS)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Не удалось запустить Nostromo Codex"
+            alert.informativeText = "Не удалось получить исключительный доступ к настройкам и восстановлению ввода. \(error.localizedDescription)"
+            alert.runModal()
+            exit(EXIT_FAILURE)
+        }
         let model = AppModel(preferences: AppPreferences())
         _model = StateObject(wrappedValue: model)
         NostromoApplicationDelegate.terminationHandler = { [weak model] in
