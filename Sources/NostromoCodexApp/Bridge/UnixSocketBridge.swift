@@ -92,9 +92,14 @@ final class UnixSocketBridge: @unchecked Sendable {
 
     static let runtimeDirectoryPrefix = BridgeRuntimeDirectory.directoryPrefix
     static let ownerMarkerFileName = BridgeRuntimeDirectory.ownerMarkerFileName
+    static let discoveryDirectoryPrefix =
+        BridgeRuntimeDirectory.discoveryDirectoryPrefix
+    static let sessionDescriptorFileName =
+        BridgeRuntimeDirectory.sessionDescriptorFileName
 
     let runtimeDirectory: URL
     let socketPath: String
+    let sessionDescriptorPath: String
     let token: String
 
     var isAuthenticated: Bool {
@@ -206,6 +211,7 @@ final class UnixSocketBridge: @unchecked Sendable {
         self.runtimeDirectoryOwner = runtimeDirectoryOwner
         runtimeDirectory = runtimeDirectoryOwner.url
         socketPath = runtimeDirectoryOwner.socketPath
+        sessionDescriptorPath = runtimeDirectoryOwner.sessionDescriptorPath
         token = Self.randomToken()
     }
 
@@ -366,10 +372,25 @@ final class UnixSocketBridge: @unchecked Sendable {
             )
             return
         }
-        chmod(socketPath, 0o600)
+        guard chmod(socketPath, 0o600) == 0 else {
+            fail(
+                "Не удалось защитить сокет: \(Self.posixMessage())",
+                activeGeneration: generation
+            )
+            return
+        }
         guard Darwin.listen(fd, 1) == 0 else {
             fail(
                 "Не удалось начать прослушивание сокета: \(Self.posixMessage())",
+                activeGeneration: generation
+            )
+            return
+        }
+        do {
+            try runtimeDirectoryOwner.publishSession(token: token)
+        } catch {
+            fail(
+                "Не удалось опубликовать защищённый сеанс моста.",
                 activeGeneration: generation
             )
             return

@@ -257,6 +257,18 @@ final class AppModelTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
     }
 
+    func testObsoleteRuntimeHUDPreferenceIsRemoved() throws {
+        let suiteName = "io.nostromo-codex.tests.preferences.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set(true, forKey: "ux.showRuntimeHUD")
+
+        _ = AppPreferences(defaults: defaults)
+
+        XCTAssertNil(defaults.object(forKey: "ux.showRuntimeHUD"))
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
     func testCompletingSetupStartsHIDWithoutTerminatingRunningChatGPT() async {
         let fixture = makeFixture()
         let model = fixture.model
@@ -472,6 +484,11 @@ final class AppModelTests: XCTestCase {
                 XCTAssertEqual(emitted.first?.name, "submit-active-composer")
             case .toggleChatWorkMode:
                 XCTAssertEqual(emitted.first?.name, "toggle-chat-work-mode")
+            case let .insertComposerText(text):
+                XCTAssertEqual(emitted.first?.name, "insert-composer-text")
+                XCTAssertEqual(emitted.first?.payload["text"], text)
+            case .clearComposerProject:
+                XCTAssertEqual(emitted.first?.name, "clear-composer-project")
             case .pushToTalk:
                 XCTAssertTrue(emitted.contains(where: { $0.name == "push-to-talk-start" }))
                 XCTAssertTrue(emitted.contains(where: { $0.name == "push-to-talk-stop" }))
@@ -690,6 +707,30 @@ final class AppModelTests: XCTestCase {
 
         XCTAssertEqual(fixture.bridge.actions.last?.name, "run-command")
         XCTAssertEqual(fixture.bridge.actions.last?.payload["commandId"], unknownID)
+    }
+
+    func testSkillPickerActionInsertsDollarIntoComposer() async {
+        let fixture = makeFixture()
+        let model = fixture.model
+
+        model.setBinding(.codexAction("composer.openSkillPicker"), for: .key01)
+        fixture.hid.emitButton(.key01, pressed: true, configuration: model.configuration)
+        await settle()
+
+        XCTAssertEqual(fixture.bridge.actions.last?.name, "insert-composer-text")
+        XCTAssertEqual(fixture.bridge.actions.last?.payload["text"], "$")
+    }
+
+    func testClearProjectActionUsesDedicatedBridgeAction() async {
+        let fixture = makeFixture()
+        let model = fixture.model
+
+        model.setBinding(.codexAction("composer.clearProject"), for: .key01)
+        fixture.hid.emitButton(.key01, pressed: true, configuration: model.configuration)
+        await settle()
+
+        XCTAssertEqual(fixture.bridge.actions.last?.name, "clear-composer-project")
+        XCTAssertTrue(fixture.bridge.actions.last?.payload.isEmpty == true)
     }
 
     func testCalibrationWaitsForReleaseAndRejectsRepeatedPhysicalButton() async {
@@ -1266,9 +1307,9 @@ final class AppModelTests: XCTestCase {
 
         publish(.awaitingResponse)
         await settle()
-        XCTAssertTrue(fixture.hid.lightingSummaries.last?.red ?? false)
+        XCTAssertFalse(fixture.hid.lightingSummaries.last?.red ?? true)
         XCTAssertFalse(fixture.hid.lightingSummaries.last?.green ?? true)
-        XCTAssertFalse(fixture.hid.lightingSummaries.last?.blue ?? true)
+        XCTAssertTrue(fixture.hid.lightingSummaries.last?.blue ?? false)
 
         publish(.working)
         await settle()
@@ -1299,6 +1340,25 @@ final class AppModelTests: XCTestCase {
         XCTAssertFalse(fixture.hid.lightingSummaries.last?.red ?? true)
         XCTAssertFalse(fixture.hid.lightingSummaries.last?.green ?? true)
         XCTAssertFalse(fixture.hid.lightingSummaries.last?.blue ?? true)
+    }
+
+    func testAwaitingResponseKeepsReadyIndicatorInsteadOfRedAttention() async {
+        let fixture = makeFixture()
+        fixture.bridge.onStatus?(.connected)
+        fixture.bridge.onCapabilities?(completeTestCapabilities())
+        fixture.bridge.onTaskSlots?([
+            CodexTaskSlot(
+                id: 0,
+                title: "Обычное обновление задачи",
+                status: .awaitingResponse,
+                selected: true
+            ),
+        ])
+        await settle()
+
+        XCTAssertFalse(fixture.hid.lightingSummaries.last?.red ?? true)
+        XCTAssertFalse(fixture.hid.lightingSummaries.last?.green ?? true)
+        XCTAssertTrue(fixture.hid.lightingSummaries.last?.blue ?? false)
     }
 
     func testTaskCompletionFlashesKeypadOnceOnTransitionToUnread() async {
@@ -1742,6 +1802,7 @@ private final class FakeFallbackController: CodexFallbackControlling {
 
 private final class FakeBridge: BridgeServing, @unchecked Sendable {
     let socketPath = "/tmp/fake.sock"
+    let sessionDescriptorPath = "/tmp/fake-session.json"
     let token = "fake-token"
     let isAuthenticated = true
     var onStatus: UnixSocketBridge.StatusHandler?
@@ -1924,6 +1985,7 @@ private final class FakeLauncher: ChatGPTLaunching, @unchecked Sendable {
     func launch(
         preloadURL _: URL,
         socketPath _: String,
+        sessionDescriptorPath _: String,
         token _: String,
         forceUnsupported _: Bool
     ) async throws {

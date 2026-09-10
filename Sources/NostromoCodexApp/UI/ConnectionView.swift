@@ -122,24 +122,6 @@ struct ConnectionView: View {
                     Text("Действует только после настройки и не завершает уже запущенный ChatGPT.")
                         .font(.caption)
                         .foregroundStyle(NostromoTheme.mutedForeground)
-
-                    Divider()
-
-                    Toggle(
-                        "Показывать отклик действий поверх рабочей области",
-                        isOn: Binding(
-                            get: { model.preferences.showRuntimeHUD },
-                            set: { model.setRuntimeHUDEnabled($0) }
-                        )
-                    )
-                    .help("Показывать отклик действий поверх рабочей области")
-                    .accessibilityLabel("Показывать отклик действий поверх рабочей области")
-                    .accessibilityValue(
-                        model.preferences.showRuntimeHUD ? "Включено" : "Выключено"
-                    )
-                    Text("Экранный индикатор не перехватывает фокус клавиатуры, а постоянный статус диктовки остаётся видимым.")
-                        .font(.caption)
-                        .foregroundStyle(NostromoTheme.mutedForeground)
                 }
                 .padding(NostromoSpace.lg)
                 .nostromoPanel()

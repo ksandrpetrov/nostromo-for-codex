@@ -104,10 +104,7 @@ struct NostromoCodexApp: App {
     @StateObject private var model: AppModel
 
     init() {
-        let model = AppModel(
-            preferences: AppPreferences(),
-            hudPresenter: RuntimeHUDWindowController()
-        )
+        let model = AppModel(preferences: AppPreferences())
         _model = StateObject(wrappedValue: model)
         NostromoApplicationDelegate.terminationHandler = { [weak model] in
             model?.shutdown()

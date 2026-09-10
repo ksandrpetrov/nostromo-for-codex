@@ -20,6 +20,7 @@ const PROTOCOL_VERSION = 2;
 const REPORT_LENGTH = 64;
 const MAX_BUFFER = 1024 * 1024;
 const OPEN_TIMEOUT_MS = 2000;
+const RECONNECT_DELAYS_MS = Object.freeze([100, 250, 500, 1000, 2000]);
 const VIEW_MESSAGE_CHANNEL = "codex_desktop:message-for-view";
 const SYNTHETIC_PATH = "nostromo-codex://project2077";
 const COMPATIBILITY = (() => {
@@ -31,6 +32,7 @@ const COMPATIBILITY = (() => {
     return manifest;
   } catch { return { schemaVersion: 0, builds: [] }; }
 })();
+const DISCOVERY_PATH = process.env.NOSTROMO_CODEX_DISCOVERY;
 const SOCKET_PATH = process.env.NOSTROMO_CODEX_SOCKET;
 const TOKEN = process.env.NOSTROMO_CODEX_TOKEN;
 const FORCE = process.env.NOSTROMO_CODEX_FORCE === "1";
@@ -49,6 +51,7 @@ const TASK_STATUSES = new Set([
   "error",
 ]);
 const APP_ACTIONS = Object.freeze({
+  clearComposerProject: "clear-composer-project",
   focusChatGPT: "focus-chatgpt",
   insertComposerText: "insert-composer-text",
   insertSkillMention: "insert-skill-mention",
@@ -65,6 +68,7 @@ const APP_ACTIONS = Object.freeze({
   toggleChatGPT: "toggle-chatgpt",
 });
 const APP_ACTION_CONTRACT = Object.freeze([
+  { name: APP_ACTIONS.clearComposerProject, requiredPayloadKeys: [] },
   { name: APP_ACTIONS.focusChatGPT, requiredPayloadKeys: [] },
   { name: APP_ACTIONS.insertComposerText, requiredPayloadKeys: ["text"] },
   {
@@ -149,12 +153,205 @@ function log(message) {
 }
 
 function bridgeAvailable() {
-  if (!SOCKET_PATH || !TOKEN) return false;
   try {
-    return fs.lstatSync(SOCKET_PATH).isSocket();
+    const endpoint = bridgeEndpoint();
+    return fs.lstatSync(endpoint.socketPath).isSocket();
   } catch {
     return false;
   }
+}
+
+function bridgeEndpoint() {
+  if (DISCOVERY_PATH) return discoveredBridgeEndpoint();
+  if (!SOCKET_PATH || !TOKEN) {
+    throw new Error("Мост Nostromo Codex не настроен");
+  }
+  return { socketPath: SOCKET_PATH, token: TOKEN };
+}
+
+function discoveredBridgeEndpoint() {
+  if (!path.isAbsolute(DISCOVERY_PATH)) {
+    throw new Error("Путь обнаружения Nostromo Codex должен быть абсолютным");
+  }
+  if (typeof process.geteuid !== "function") {
+    throw new Error("Не удалось проверить владельца сеанса Nostromo Codex");
+  }
+  const owner = process.geteuid();
+  const descriptorPath = path.normalize(DISCOVERY_PATH);
+  const discoveryDirectory = path.dirname(descriptorPath);
+  const runtimeRoot = path.dirname(discoveryDirectory);
+  const expectedDiscoveryDirectory = path.join(
+    runtimeRoot,
+    `nostromo-codex-discovery-${owner}`,
+  );
+  if (
+    discoveryDirectory !== expectedDiscoveryDirectory ||
+    path.basename(descriptorPath) !== "session.json"
+  ) {
+    throw new Error("Путь обнаружения Nostromo Codex не соответствует защищённому формату");
+  }
+  assertPrivatePath(discoveryDirectory, "directory", 0o700, owner);
+  const descriptor = readPrivateJSON(descriptorPath, owner);
+  if (
+    descriptor.version !== 1 ||
+    !Number.isSafeInteger(descriptor.pid) ||
+    descriptor.pid < 1 ||
+    typeof descriptor.runtimeID !== "string" ||
+    !/^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/.test(
+      descriptor.runtimeID,
+    ) ||
+    typeof descriptor.socketPath !== "string" ||
+    !/^[0-9a-f]{64}$/.test(descriptor.token)
+  ) {
+    throw new Error("Дескриптор сеанса Nostromo Codex некорректен");
+  }
+
+  const runtimeDirectory = path.join(
+    runtimeRoot,
+    `nostromo-codex-runtime-${descriptor.runtimeID}`,
+  );
+  const expectedSocketPath = path.join(runtimeDirectory, "project2077.sock");
+  if (path.normalize(descriptor.socketPath) !== expectedSocketPath) {
+    throw new Error("Сокет сеанса Nostromo Codex находится вне защищённого каталога");
+  }
+  assertPrivatePath(runtimeDirectory, "directory", 0o700, owner);
+  const marker = readPrivateJSON(path.join(runtimeDirectory, ".owner"), owner);
+  if (
+    marker.version !== 1 ||
+    marker.pid !== descriptor.pid ||
+    marker.runtimeID !== descriptor.runtimeID
+  ) {
+    throw new Error("Владелец сеанса Nostromo Codex не подтверждён");
+  }
+  assertPrivatePath(expectedSocketPath, "socket", 0o600, owner);
+  return {
+    socketPath: expectedSocketPath,
+    token: descriptor.token,
+  };
+}
+
+function readPrivateJSON(filePath, owner) {
+  const noFollow = fs.constants.O_NOFOLLOW || 0;
+  const closeOnExec = fs.constants.O_CLOEXEC || 0;
+  const descriptor = fs.openSync(
+    filePath,
+    fs.constants.O_RDONLY | noFollow | closeOnExec,
+  );
+  try {
+    const status = fs.fstatSync(descriptor);
+    if (
+      !status.isFile() ||
+      status.uid !== owner ||
+      (status.mode & 0o777) !== 0o600 ||
+      status.nlink !== 1 ||
+      status.size < 1 ||
+      status.size > 4096
+    ) {
+      throw new Error("Защищённый файл Nostromo Codex имеет неверные атрибуты");
+    }
+    return JSON.parse(fs.readFileSync(descriptor, "utf8"));
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function assertPrivatePath(filePath, kind, mode, owner) {
+  const status = fs.lstatSync(filePath);
+  const kindMatches = kind === "directory"
+    ? status.isDirectory()
+    : status.isSocket();
+  if (
+    !kindMatches ||
+    status.isSymbolicLink() ||
+    status.uid !== owner ||
+    (status.mode & 0o777) !== mode
+  ) {
+    throw new Error(`Защищённый ${kind} Nostromo Codex имеет неверные атрибуты`);
+  }
+}
+
+function openBridgeConnection() {
+  return new Promise((resolve, reject) => {
+    let endpoint;
+    try {
+      endpoint = bridgeEndpoint();
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    const socket = net.createConnection(endpoint.socketPath);
+    socket.setNoDelay(true);
+    socket.setEncoding("utf8");
+    let buffer = "";
+    let settled = false;
+    const timeout = setTimeout(
+      () => fail(new Error("Истекло время ожидания моста Nostromo Codex")),
+      OPEN_TIMEOUT_MS,
+    );
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      socket.removeListener("data", onData);
+      socket.removeListener("error", fail);
+      socket.removeListener("close", onClose);
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      socket.destroy();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const onClose = () =>
+      fail(new Error("Мост Nostromo Codex закрылся во время согласования"));
+    const onData = (chunk) => {
+      buffer += chunk;
+      if (buffer.length > MAX_BUFFER) {
+        fail(new Error("Данные согласования Nostromo Codex превысили 1 МиБ"));
+        return;
+      }
+      for (;;) {
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) return;
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        if (!line.trim()) continue;
+        let message;
+        try {
+          message = JSON.parse(line);
+        } catch {
+          fail(new Error("Nostromo Codex вернул некорректный JSON согласования"));
+          return;
+        }
+        if (
+          message.v !== PROTOCOL_VERSION ||
+          message.type !== "hello-ack" ||
+          message.token !== endpoint.token
+        ) {
+          fail(new Error(message.message || "Ошибка аутентификации Nostromo Codex"));
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve({ buffer, socket });
+        return;
+      }
+    };
+
+    socket.on("data", onData);
+    socket.once("error", fail);
+    socket.once("close", onClose);
+    socket.once("connect", () => {
+      socket.write(`${JSON.stringify({
+        v: PROTOCOL_VERSION,
+        type: "hello",
+        role: "node-hid-shim",
+        path: SYNTHETIC_PATH,
+        token: endpoint.token,
+      })}\n`);
+    });
+  });
 }
 
 function assertCompatible() {
@@ -176,11 +373,17 @@ function assertCompatible() {
 }
 
 class VirtualHIDAsyncDevice extends EventEmitter {
-  constructor(socket) {
+  constructor(socket, initialBuffer = "") {
     super();
-    this.socket = socket;
+    this.socket = null;
     this.buffer = "";
     this.closed = false;
+    this.closeEmitted = false;
+    this.connectionGeneration = 0;
+    this.connectionWaiters = new Set();
+    this.reconnectAttempt = 0;
+    this.reconnectInFlight = false;
+    this.reconnectTimer = null;
     this.pushToTalkActive = false;
     this.taskSlotsDigest = null;
     this.capabilityDigest = null;
@@ -188,136 +391,190 @@ class VirtualHIDAsyncDevice extends EventEmitter {
     this.capabilityTimer.unref();
     this.actionQueue = Promise.resolve();
     virtualDevices.add(this);
-    socket.setEncoding("utf8");
-    socket.on("data", (chunk) => this.receive(chunk));
-    socket.on("error", (error) => this.emitAsyncError(error));
-    socket.on("close", () => {
-      clearInterval(this.capabilityTimer);
-      this.closed = true;
-      virtualDevices.delete(this);
-      this.stopPushToTalkFailSafe();
-      this.emit("close");
-    });
+    this.attachSocket(socket, initialBuffer);
+  }
+
+  static async open() {
+    const connection = await openBridgeConnection();
+    return new VirtualHIDAsyncDevice(connection.socket, connection.buffer);
   }
 
   publishCapabilities() {
-    if (this.closed) return;
+    const socket = this.socket;
+    const generation = this.connectionGeneration;
+    if (!socket || !this.isConnectionActive(socket, generation)) return;
     try {
       const manifest = runtimeCapabilityManifest();
       const digest = JSON.stringify(manifest);
       if (digest === this.capabilityDigest) return;
       this.capabilityDigest = digest;
-      this.writeLine(manifest).catch((error) => this.emitAsyncError(error));
+      this.writeLine(manifest, generation).catch((error) => {
+        if (!this.isConnectionActive(socket, generation)) return;
+        this.capabilityDigest = null;
+        this.emitAsyncError(error);
+      });
     } catch (error) { this.emitAsyncError(error); }
   }
 
-  static open() {
-    return new Promise((resolve, reject) => {
-      if (!SOCKET_PATH || !TOKEN) {
-        reject(new Error("Мост Nostromo Codex не настроен"));
-        return;
+  attachSocket(socket, initialBuffer = "") {
+    if (this.closed) {
+      socket.destroy();
+      return;
+    }
+    this.connectionGeneration += 1;
+    const generation = this.connectionGeneration;
+    this.socket = socket;
+    this.buffer = "";
+    this.reconnectAttempt = 0;
+    this.taskSlotsDigest = null;
+    this.capabilityDigest = null;
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => this.receive(chunk, generation));
+    socket.on("error", (error) => {
+      if (DISCOVERY_PATH && !this.closed) {
+        log(`Соединение Nostromo Codex прервано: ${error.message}`);
+      } else {
+        this.emitAsyncError(error);
       }
-      const socket = net.createConnection(SOCKET_PATH);
-      socket.setNoDelay(true);
-      socket.setEncoding("utf8");
-      let buffer = "";
-      let settled = false;
-      const timeout = setTimeout(() => fail(new Error("Истекло время ожидания моста Nostromo Codex")), OPEN_TIMEOUT_MS);
-
-      const cleanup = () => {
-        clearTimeout(timeout);
-        socket.removeListener("data", onData);
-        socket.removeListener("error", fail);
-        socket.removeListener("close", onClose);
-      };
-      const fail = (error) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        socket.destroy();
-        reject(error instanceof Error ? error : new Error(String(error)));
-      };
-      const onClose = () => fail(new Error("Мост Nostromo Codex закрылся во время согласования"));
-      const onData = (chunk) => {
-        buffer += chunk;
-        if (buffer.length > MAX_BUFFER) {
-          fail(new Error("Данные согласования Nostromo Codex превысили 1 МиБ"));
-          return;
-        }
-        for (;;) {
-          const newline = buffer.indexOf("\n");
-          if (newline < 0) return;
-          const line = buffer.slice(0, newline);
-          buffer = buffer.slice(newline + 1);
-          if (!line.trim()) continue;
-          let message;
-          try {
-            message = JSON.parse(line);
-          } catch {
-            fail(new Error("Nostromo Codex вернул некорректный JSON согласования"));
-            return;
-          }
-          if (
-            message.v !== PROTOCOL_VERSION ||
-            message.type !== "hello-ack" ||
-            message.token !== TOKEN
-          ) {
-            fail(new Error(message.message || "Ошибка аутентификации Nostromo Codex"));
-            return;
-          }
-          settled = true;
-          cleanup();
-          const device = new VirtualHIDAsyncDevice(socket);
-          if (buffer) device.receive(buffer);
-          device.publishCapabilities();
-          device.publishRuntimeState();
-          device.publishTaskSlots(latestTaskSlotsMessage);
-          resolve(device);
-          return;
-        }
-      };
-
-      socket.on("data", onData);
-      socket.once("error", fail);
-      socket.once("close", onClose);
-      socket.once("connect", () => {
-        socket.write(`${JSON.stringify({
-          v: PROTOCOL_VERSION,
-          type: "hello",
-          role: "node-hid-shim",
-          path: SYNTHETIC_PATH,
-          token: TOKEN,
-        })}\n`);
-      });
     });
+    socket.on("close", () => this.handleSocketClose(socket, generation));
+    for (const waiter of this.connectionWaiters) waiter.resolve(socket);
+    this.connectionWaiters.clear();
+    if (initialBuffer) this.receive(initialBuffer, generation);
+    this.publishCapabilities();
+    this.publishRuntimeState();
+    this.publishTaskSlots(latestTaskSlotsMessage);
   }
 
   async write(dataLike) {
-    if (this.closed || this.socket.destroyed) throw new Error("Project2077 закрыт");
     const report = Buffer.from(dataLike);
     if (report.length !== REPORT_LENGTH) {
       throw new RangeError(`Запись Project2077 должна содержать ${REPORT_LENGTH} байт`);
     }
-    await this.writeLine({
+    const message = {
       v: PROTOCOL_VERSION,
       type: "host-report",
       data: report.toString("base64"),
-    });
-    return report.length;
+    };
+    for (;;) {
+      const socket = await this.waitForSocket();
+      try {
+        await this.writeLineToSocket(message, socket);
+        return report.length;
+      } catch (error) {
+        if (!DISCOVERY_PATH || this.closed) throw error;
+        if (socket === this.socket) socket.destroy();
+      }
+    }
   }
 
   async close() {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.capabilityTimer);
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.rejectConnectionWaiters(new Error("Project2077 закрыт"));
+    const socket = this.socket;
+    if (!socket || socket.destroyed) {
+      this.finishClose();
+      return;
+    }
     await new Promise((resolve) => {
-      this.socket.once("close", resolve);
-      this.socket.end();
+      socket.once("close", resolve);
+      socket.end();
     });
   }
 
-  receive(chunk) {
-    if (this.closed) return;
+  handleSocketClose(socket, generation) {
+    if (
+      this.socket !== socket ||
+      this.connectionGeneration !== generation
+    ) return;
+    this.socket = null;
+    this.buffer = "";
+    this.connectionGeneration += 1;
+    this.stopPushToTalkFailSafe();
+    if (this.closed) {
+      this.finishClose();
+      return;
+    }
+    if (DISCOVERY_PATH) {
+      this.scheduleReconnect();
+      return;
+    }
+    this.closed = true;
+    this.rejectConnectionWaiters(new Error("Project2077 закрыт"));
+    this.finishClose();
+  }
+
+  scheduleReconnect() {
+    if (this.closed || this.reconnectInFlight || this.reconnectTimer) return;
+    const delay = RECONNECT_DELAYS_MS[
+      Math.min(this.reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)
+    ];
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.reconnect().catch((error) => {
+        log(`Не удалось переподключить Nostromo Codex: ${error.message}`);
+      });
+    }, delay);
+    if (typeof this.reconnectTimer.unref === "function") this.reconnectTimer.unref();
+  }
+
+  async reconnect() {
+    if (this.closed || this.reconnectInFlight) return;
+    this.reconnectInFlight = true;
+    try {
+      const connection = await openBridgeConnection();
+      if (this.closed) {
+        connection.socket.destroy();
+        return;
+      }
+      this.attachSocket(connection.socket, connection.buffer);
+    } catch (error) {
+      this.reconnectAttempt += 1;
+      log(`Ожидание нового сеанса Nostromo Codex: ${error.message}`);
+    } finally {
+      this.reconnectInFlight = false;
+    }
+    if (!this.closed && !this.socket) this.scheduleReconnect();
+  }
+
+  waitForSocket() {
+    if (this.closed) return Promise.reject(new Error("Project2077 закрыт"));
+    if (this.socket && !this.socket.destroyed) return Promise.resolve(this.socket);
+    if (!DISCOVERY_PATH) return Promise.reject(new Error("Project2077 закрыт"));
+    return new Promise((resolve, reject) => {
+      this.connectionWaiters.add({ resolve, reject });
+    });
+  }
+
+  rejectConnectionWaiters(error) {
+    for (const waiter of this.connectionWaiters) waiter.reject(error);
+    this.connectionWaiters.clear();
+  }
+
+  finishClose() {
+    if (this.closeEmitted) return;
+    clearInterval(this.capabilityTimer);
+    this.closeEmitted = true;
+    virtualDevices.delete(this);
+    this.stopPushToTalkFailSafe();
+    this.emit("close");
+  }
+
+  isConnectionActive(socket, generation) {
+    return !this.closed &&
+      this.socket === socket &&
+      !socket.destroyed &&
+      this.connectionGeneration === generation;
+  }
+
+  receive(chunk, generation = this.connectionGeneration) {
+    if (this.closed || generation !== this.connectionGeneration) return;
     this.buffer += chunk;
     if (this.buffer.length > MAX_BUFFER) {
       this.emitAsyncError(new Error("Буфер моста Nostromo Codex превысил 1 МиБ"));
@@ -349,8 +606,9 @@ class VirtualHIDAsyncDevice extends EventEmitter {
         continue;
       }
       if (message.type === "app-action") {
+        const actionGeneration = generation;
         this.actionQueue = this.actionQueue
-          .then(() => this.handleAction(message))
+          .then(() => this.handleAction(message, actionGeneration))
           .catch((error) => {
             this.emitAsyncError(error instanceof Error ? error : new Error(String(error)));
           });
@@ -362,17 +620,28 @@ class VirtualHIDAsyncDevice extends EventEmitter {
     }
   }
 
-  async handleAction(message) {
+  async handleAction(message, generation) {
     if (!Number.isSafeInteger(message.id) || message.id < 1) return;
-    if (this.closed || this.socket.destroyed) return;
+    if (
+      this.closed ||
+      generation !== this.connectionGeneration ||
+      !this.socket ||
+      this.socket.destroyed
+    ) return;
     try {
       const result = await executeAppAction(message.action, message.payload || {});
+      if (
+        this.closed ||
+        generation !== this.connectionGeneration ||
+        !this.socket ||
+        this.socket.destroyed
+      ) return;
       if (result && Object.hasOwn(result, "reasoningEffort")) {
         await this.writeLine({
           v: PROTOCOL_VERSION,
           type: "runtime-state",
           reasoningEffort: result.reasoningEffort,
-        });
+        }, generation);
       } else if (
         message.action === APP_ACTIONS.runCommand &&
         String(message.payload?.commandId || "").toLowerCase().includes("reasoning")
@@ -386,15 +655,21 @@ class VirtualHIDAsyncDevice extends EventEmitter {
         type: "app-action-result",
         id: message.id,
         ok: true,
-      });
+      }, generation);
     } catch (error) {
+      if (
+        this.closed ||
+        generation !== this.connectionGeneration ||
+        !this.socket ||
+        this.socket.destroyed
+      ) return;
       await this.writeLine({
         v: PROTOCOL_VERSION,
         type: "app-action-result",
         id: message.id,
         ok: false,
         error: error instanceof Error ? error.message : String(error),
-      });
+      }, generation);
     }
   }
 
@@ -412,7 +687,7 @@ class VirtualHIDAsyncDevice extends EventEmitter {
   }
 
   publishTaskSlots(message) {
-    if (!message || this.closed || this.socket.destroyed) return;
+    if (!message || this.closed || !this.socket || this.socket.destroyed) return;
     const digest = JSON.stringify(message.slots);
     if (digest === this.taskSlotsDigest) return;
     this.taskSlotsDigest = digest;
@@ -422,13 +697,29 @@ class VirtualHIDAsyncDevice extends EventEmitter {
     });
   }
 
-  writeLine(message) {
+  writeLine(message, generation = this.connectionGeneration) {
+    const socket = this.socket;
+    if (
+      this.closed ||
+      !socket ||
+      socket.destroyed ||
+      generation !== this.connectionGeneration
+    ) {
+      return Promise.reject(new Error("Мост Nostromo Codex закрыт"));
+    }
+    return this.writeLineToSocket(message, socket);
+  }
+
+  writeLineToSocket(message, socket) {
     return new Promise((resolve, reject) => {
-      if (this.closed || this.socket.destroyed) {
+      if (this.closed || !socket || socket.destroyed) {
         reject(new Error("Мост Nostromo Codex закрыт"));
         return;
       }
-      this.socket.write(`${JSON.stringify(message)}\n`, (error) => error ? reject(error) : resolve());
+      socket.write(
+        `${JSON.stringify(message)}\n`,
+        (error) => error ? reject(error) : resolve(),
+      );
     });
   }
 
@@ -586,6 +877,9 @@ async function executeAppAction(action, payload) {
       return;
     case APP_ACTIONS.toggleChatWorkMode:
       await toggleChatWorkMode();
+      return;
+    case APP_ACTIONS.clearComposerProject:
+      await clearComposerProject();
       return;
     case APP_ACTIONS.submitActiveComposer:
       await submitActiveComposer();
@@ -841,6 +1135,41 @@ async function toggleChatWorkMode() {
   throw new Error("Переключатель Chat / Work не найден в текущем окне ChatGPT");
 }
 
+async function clearComposerProject() {
+  focusChatGPT();
+  const window = usableWindow();
+  if (!window || typeof window.webContents.executeJavaScript !== "function") {
+    throw new Error("Нет доступного окна ChatGPT для снятия проекта");
+  }
+  const result = await window.webContents.executeJavaScript(`
+    (() => {
+      // NOSTROMO_CLEAR_COMPOSER_PROJECT
+      const buttons = Array.from(
+        document.querySelectorAll(
+          "button[data-clear-project-button]:not(:disabled)"
+        )
+      ).filter((button) => {
+        if (!button.isConnected || button.getAttribute("aria-disabled") === "true") {
+          return false;
+        }
+        const style = window.getComputedStyle(button);
+        return style.display !== "none"
+          && style.visibility !== "hidden"
+          && button.getClientRects().length > 0;
+      });
+      if (buttons.length === 0) return { ok: false, reason: "missing" };
+      if (buttons.length !== 1) return { ok: false, reason: "ambiguous" };
+      buttons[0].click();
+      return { ok: true };
+    })()
+  `, true);
+  if (result?.ok === true) return;
+  if (result?.reason === "ambiguous") {
+    throw new Error("В текущем окне ChatGPT найдено несколько кнопок «Работать без проекта»");
+  }
+  throw new Error("Кнопка «Работать без проекта» сейчас недоступна");
+}
+
 function discoverCommandIDs() {
   const fallback = {
     commandIds: new Set(COMPATIBILITY.builds.some((entry) => entry.verified && entry.version === CHATGPT_VERSION && entry.build === CHATGPT_BUILD) ? SAFE_COMMAND_CANDIDATES : []),
@@ -880,9 +1209,9 @@ function runtimeCapabilityManifest() {
   const commandIds = [...ALLOWED_COMMANDS].sort();
   const unavailableFeatures = [];
   for (const [id, label] of [
-    ["composer.openPermissions", "Окно разрешений не зарегистрировано в сборке ChatGPT 5848."],
-    ["compact", "Команда Compact не зарегистрирована как команда приложения в сборке ChatGPT 5848."],
-    ["status", "Команда Status не зарегистрирована как команда приложения в сборке ChatGPT 5848."],
+    ["composer.openPermissions", "Окно разрешений не зарегистрировано в проверенной сборке ChatGPT."],
+    ["compact", "Команда Compact не зарегистрирована как команда приложения в проверенной сборке ChatGPT."],
+    ["status", "Команда Status не зарегистрирована как команда приложения в проверенной сборке ChatGPT."],
   ]) {
     if (!DISCOVERED_COMMANDS.commandIds.has(id)) unavailableFeatures.push(label);
   }
@@ -1081,6 +1410,7 @@ function stripManagedEnvironment() {
     if (next) process.env.NODE_OPTIONS = next;
     else delete process.env.NODE_OPTIONS;
   }
+  delete process.env.NOSTROMO_CODEX_DISCOVERY;
   delete process.env.NOSTROMO_CODEX_SOCKET;
   delete process.env.NOSTROMO_CODEX_TOKEN;
   delete process.env.NOSTROMO_CODEX_FORCE;

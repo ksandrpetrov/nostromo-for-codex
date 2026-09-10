@@ -5,6 +5,7 @@ import XCTest
 final class BridgeProtocolContractTests: XCTestCase {
     func testEveryTypedActionPreservesProtocolV2WireShape() throws {
         let actions: [(BridgeAppAction, String, [String: String])] = [
+            (.clearComposerProject, "clear-composer-project", [:]),
             (.focusChatGPT, "focus-chatgpt", [:]),
             (.insertComposerText(text: "draft"), "insert-composer-text", ["text": "draft"]),
             (
@@ -69,6 +70,7 @@ final class BridgeProtocolContractTests: XCTestCase {
 
     private var sampleActions: [BridgeAppAction] {
         [
+            .clearComposerProject,
             .runCommand(id: ""),
             .focusChatGPT,
             .toggleChatGPT(minimizeIfVisible: false),

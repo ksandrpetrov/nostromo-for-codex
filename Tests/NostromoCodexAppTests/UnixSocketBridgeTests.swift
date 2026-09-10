@@ -115,6 +115,127 @@ final class UnixSocketBridgeTests: XCTestCase {
         XCTAssertEqual((object["pid"] as? NSNumber)?.int32Value, 4_242)
     }
 
+    func testInitializationRejectsUnsafeDiscoveryDirectoryWithoutChangingIt() throws {
+        let runtimeRoot = try makeTemporaryRuntimeRoot()
+        defer { try? FileManager.default.removeItem(at: runtimeRoot) }
+        let discoveryDirectory = runtimeRoot.appendingPathComponent(
+            "nostromo-codex-discovery-\(Darwin.geteuid())",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: discoveryDirectory,
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: discoveryDirectory.path
+        )
+
+        XCTAssertThrowsError(
+            try UnixSocketBridge(
+                runtimeRoot: runtimeRoot,
+                currentPID: 4_249,
+                processLiveness: { _ in .unknown }
+            )
+        )
+        XCTAssertEqual(try posixMode(discoveryDirectory.path) & 0o777, 0o755)
+    }
+
+    func testListeningBridgePublishesPrivateReconnectDescriptor() throws {
+        let runtimeRoot = try makeTemporaryRuntimeRoot()
+        defer { try? FileManager.default.removeItem(at: runtimeRoot) }
+        let bridge = try UnixSocketBridge(
+            runtimeRoot: runtimeRoot,
+            currentPID: 4_250,
+            processLiveness: { _ in .unknown }
+        )
+        defer { bridge.stop() }
+        let discoveryDirectory = runtimeRoot.appendingPathComponent(
+            "nostromo-codex-discovery-\(Darwin.geteuid())",
+            isDirectory: true
+        )
+        let descriptorURL = discoveryDirectory.appendingPathComponent("session.json")
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: descriptorURL.path))
+
+        let listening = expectation(description: "bridge listening")
+        bridge.onStatus = { status in
+            if status == .listening { listening.fulfill() }
+        }
+        bridge.start()
+        wait(for: [listening], timeout: 2)
+
+        XCTAssertEqual(try posixMode(discoveryDirectory.path) & 0o777, 0o700)
+        XCTAssertEqual(try posixMode(descriptorURL.path) & 0o777, 0o600)
+        let descriptor = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: descriptorURL))
+                as? [String: Any]
+        )
+        XCTAssertEqual((descriptor["version"] as? NSNumber)?.intValue, 1)
+        XCTAssertEqual((descriptor["pid"] as? NSNumber)?.int32Value, 4_250)
+        XCTAssertEqual(descriptor["socketPath"] as? String, bridge.socketPath)
+        XCTAssertEqual(descriptor["token"] as? String, bridge.token)
+        XCTAssertEqual(
+            descriptor["runtimeID"] as? String,
+            String(
+                bridge.runtimeDirectory.lastPathComponent.dropFirst(
+                    UnixSocketBridge.runtimeDirectoryPrefix.count
+                )
+            )
+        )
+
+        bridge.stop()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: descriptorURL.path))
+    }
+
+    func testOlderBridgeStopDoesNotRemoveNewerReconnectDescriptor() throws {
+        let runtimeRoot = try makeTemporaryRuntimeRoot()
+        defer { try? FileManager.default.removeItem(at: runtimeRoot) }
+        let first = try UnixSocketBridge(
+            runtimeRoot: runtimeRoot,
+            currentPID: 4_251,
+            processLiveness: { _ in .unknown }
+        )
+        let second = try UnixSocketBridge(
+            runtimeRoot: runtimeRoot,
+            currentPID: 4_252,
+            processLiveness: { _ in .alive }
+        )
+        defer {
+            first.stop()
+            second.stop()
+        }
+        let descriptorURL = runtimeRoot
+            .appendingPathComponent(
+                "nostromo-codex-discovery-\(Darwin.geteuid())",
+                isDirectory: true
+            )
+            .appendingPathComponent("session.json")
+
+        let firstListening = expectation(description: "first bridge listening")
+        first.onStatus = { status in
+            if status == .listening { firstListening.fulfill() }
+        }
+        first.start()
+        wait(for: [firstListening], timeout: 2)
+
+        let secondListening = expectation(description: "second bridge listening")
+        second.onStatus = { status in
+            if status == .listening { secondListening.fulfill() }
+        }
+        second.start()
+        wait(for: [secondListening], timeout: 2)
+
+        first.stop()
+
+        let descriptor = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: descriptorURL))
+                as? [String: Any]
+        )
+        XCTAssertEqual(descriptor["socketPath"] as? String, second.socketPath)
+        XCTAssertEqual(descriptor["token"] as? String, second.token)
+    }
+
     func testStopRemovesInjectedRuntimeDirectoryAndIsIdempotent() throws {
         let runtimeRoot = try makeTemporaryRuntimeRoot()
         defer { try? FileManager.default.removeItem(at: runtimeRoot) }

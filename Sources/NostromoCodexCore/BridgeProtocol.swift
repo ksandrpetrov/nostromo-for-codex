@@ -2,6 +2,7 @@ import Foundation
 
 public enum BridgeAppAction: Hashable, Sendable {
     public enum Kind: String, CaseIterable, Sendable {
+        case clearComposerProject = "clear-composer-project"
         case runCommand = "run-command"
         case focusChatGPT = "focus-chatgpt"
         case toggleChatGPT = "toggle-chatgpt"
@@ -18,6 +19,7 @@ public enum BridgeAppAction: Hashable, Sendable {
         case queryRuntimeState = "query-runtime-state"
     }
 
+    case clearComposerProject
     case runCommand(id: String)
     case focusChatGPT
     case toggleChatGPT(minimizeIfVisible: Bool)
@@ -35,6 +37,7 @@ public enum BridgeAppAction: Hashable, Sendable {
 
     public var kind: Kind {
         switch self {
+        case .clearComposerProject: .clearComposerProject
         case .runCommand: .runCommand
         case .focusChatGPT: .focusChatGPT
         case .toggleChatGPT: .toggleChatGPT
@@ -70,7 +73,7 @@ public enum BridgeAppAction: Hashable, Sendable {
             ["text"]
         case .insertSkillMention:
             ["displayName", "name", "path"]
-        case .focusChatGPT, .toggleChatWorkMode, .submitActiveComposer,
+        case .clearComposerProject, .focusChatGPT, .toggleChatWorkMode, .submitActiveComposer,
              .pushToTalkStart, .pushToTalkStop, .stopActive, .queryRuntimeState:
             []
         }
@@ -94,7 +97,7 @@ public enum BridgeAppAction: Hashable, Sendable {
                 "displayName": displayName,
                 "path": path,
             ]
-        case .focusChatGPT, .toggleChatWorkMode, .submitActiveComposer,
+        case .clearComposerProject, .focusChatGPT, .toggleChatWorkMode, .submitActiveComposer,
              .pushToTalkStart, .pushToTalkStop, .stopActive, .queryRuntimeState:
             [:]
         }

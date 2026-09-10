@@ -1,5 +1,9 @@
 [
   {
+    "name": "clear-composer-project",
+    "requiredPayloadKeys": []
+  },
+  {
     "name": "focus-chatgpt",
     "requiredPayloadKeys": []
   },

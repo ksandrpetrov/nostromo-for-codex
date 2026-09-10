@@ -10,8 +10,8 @@ const preloadPath = path.resolve(
   "../Sources/NostromoCodexApp/Resources/chatgpt-preload.cjs",
 );
 
-process.env.NOSTROMO_CODEX_CHATGPT_VERSION = "26.721.41059";
-process.env.NOSTROMO_CODEX_CHATGPT_BUILD = "5848";
+process.env.NOSTROMO_CODEX_CHATGPT_VERSION = "26.721.81911";
+process.env.NOSTROMO_CODEX_CHATGPT_BUILD = "5973";
 process.env.NOSTROMO_CODEX_SERVICE_MODULE = ".vite/build/codex-micro-service-test.js";
 process.env.NOSTROMO_CODEX_ADAPTER = "micro-v1";
 process.env.NOSTROMO_CODEX_TEST_EXPORTS = "1";

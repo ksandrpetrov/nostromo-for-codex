@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "builds": [
     { "version": "26.721.41059", "build": "5848", "adapter": "micro-v1", "verified": true },
+    { "version": "26.721.81911", "build": "5973", "adapter": "micro-v1", "verified": true },
     { "version": "26.903.61454", "build": "8378", "adapter": "micro-v1", "verified": false }
   ],
   "serviceMarkers": ["@worklouder/device-kit-oai", "exports.CodexMicroService=", "updateLighting(", "findCodexMicroInterfaces"],

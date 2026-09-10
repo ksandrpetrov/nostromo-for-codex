@@ -3,6 +3,39 @@ import IOKit
 import XCTest
 
 final class HIDManagerOpenPolicyTests: XCTestCase {
+    func testPrivilegeFallbackReplacesPartialExclusiveOpenBeforeSharedRetry() {
+        enum Operation: Equatable {
+            case open(IOOptionBits)
+            case replaceManager
+        }
+
+        var operations: [Operation] = []
+        var results = [kIOReturnNotPrivileged, kIOReturnSuccess]
+
+        let result = HIDManagerOpenPolicy.open(
+            requestedSeize: true,
+            attempt: { options in
+                operations.append(.open(options))
+                return results.removeFirst()
+            },
+            replacePartiallyOpenedManager: {
+                operations.append(.replaceManager)
+            }
+        )
+
+        XCTAssertEqual(
+            operations,
+            [
+                .open(IOOptionBits(kIOHIDOptionsTypeSeizeDevice)),
+                .replaceManager,
+                .open(IOOptionBits(kIOHIDOptionsTypeNone)),
+            ]
+        )
+        XCTAssertEqual(result.status, kIOReturnSuccess)
+        XCTAssertFalse(result.seized)
+        XCTAssertEqual(result.exclusiveFailure, kIOReturnNotPrivileged)
+    }
+
     func testPrivilegeFailureFallsBackWhenExclusiveAccessWasRequested() {
         XCTAssertTrue(
             HIDManagerOpenPolicy.shouldRetryWithoutSeizing(

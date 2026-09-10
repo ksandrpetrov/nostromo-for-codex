@@ -43,6 +43,7 @@ struct MacOSInputMonitoringPermissionController:
 
 protocol BridgeServing: AnyObject, Sendable {
     var socketPath: String { get }
+    var sessionDescriptorPath: String { get }
     var token: String { get }
     var isAuthenticated: Bool { get }
     var onStatus: UnixSocketBridge.StatusHandler? { get set }
@@ -190,6 +191,7 @@ protocol ChatGPTLaunching: AnyObject, Sendable {
     func launch(
         preloadURL: URL,
         socketPath: String,
+        sessionDescriptorPath: String,
         token: String,
         forceUnsupported: Bool
     ) async throws
@@ -205,18 +207,6 @@ protocol ShortcutPosting: Sendable {
     func hasPostEventAccess() -> Bool
     func requestPostEventAccess() -> Bool
     func post(_ shortcut: ShortcutBinding, keyDown: Bool) -> Bool
-}
-
-@MainActor
-protocol RuntimeHUDPresenting: AnyObject {
-    func present(_ feedback: RuntimeFeedback)
-    func dismiss()
-}
-
-@MainActor
-final class NoopRuntimeHUDPresenter: RuntimeHUDPresenting {
-    func present(_: RuntimeFeedback) {}
-    func dismiss() {}
 }
 
 struct MacOSShortcutPoster: ShortcutPosting {
@@ -265,6 +255,7 @@ private struct UnavailableBridgeError: LocalizedError {
 /// callbacks required by the common bridge service interface.
 final class UnavailableBridge: BridgeServing, @unchecked Sendable {
     let socketPath = ""
+    let sessionDescriptorPath = ""
     let token = ""
     let isAuthenticated = false
 

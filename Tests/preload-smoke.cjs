@@ -45,6 +45,7 @@ function runAllScenarios() {
     "virtual-hid-actions",
     "ptt-failsafe",
     "close-queue-guard",
+    "automatic-reconnect",
     "authentication-failure",
     "renamed-service",
     "candidate-version",
@@ -54,6 +55,7 @@ function runAllScenarios() {
   for (const name of scenarios) {
     const environment = { ...process.env };
     delete environment.NODE_OPTIONS;
+    delete environment.NOSTROMO_CODEX_DISCOVERY;
     delete environment.NOSTROMO_CODEX_SOCKET;
     delete environment.NOSTROMO_CODEX_TOKEN;
     delete environment.NOSTROMO_CODEX_FORCE;
@@ -119,6 +121,9 @@ async function runScenario(name) {
       return;
     case "close-queue-guard":
       await testQueuedActionIsDiscardedAfterBridgeClose();
+      return;
+    case "automatic-reconnect":
+      await testAutomaticReconnectAcrossBridgeSessions();
       return;
     case "authentication-failure":
       await testAuthenticationFailure();
@@ -562,6 +567,46 @@ async function testVirtualHIDAndActions() {
       true,
     );
 
+    harness.projectDOM.configure({ buttonCount: 1 });
+    bridgePeer.send({
+      v: PROTOCOL_VERSION,
+      type: "app-action",
+      id: 117,
+      action: "clear-composer-project",
+      payload: {},
+    });
+    const clearProjectResult = await bridgePeer.next(
+      (message) => message.type === "app-action-result" && message.id === 117,
+    );
+    assert.equal(clearProjectResult.ok, true);
+    assert.equal(harness.projectDOM.clickCount, 1);
+    assert.equal(
+      harness.evaluatedScripts.some((script) =>
+        script.includes("NOSTROMO_CLEAR_COMPOSER_PROJECT") &&
+        script.includes("button[data-clear-project-button]:not(:disabled)")),
+      true,
+    );
+
+    for (const [id, buttonCount, errorPattern] of [
+      [118, 0, /недоступна/],
+      [119, 2, /несколько кнопок/],
+    ]) {
+      harness.projectDOM.configure({ buttonCount });
+      bridgePeer.send({
+        v: PROTOCOL_VERSION,
+        type: "app-action",
+        id,
+        action: "clear-composer-project",
+        payload: {},
+      });
+      const rejectedClearProject = await bridgePeer.next(
+        (message) => message.type === "app-action-result" && message.id === id,
+      );
+      assert.equal(rejectedClearProject.ok, false);
+      assert.match(rejectedClearProject.error, errorPattern);
+      assert.equal(harness.projectDOM.clickCount, 0);
+    }
+
     harness.submitDOM.configure({ mode: "chat" });
     const messagesBeforeChatSubmit = harness.viewMessages.length;
     bridgePeer.send({
@@ -718,6 +763,7 @@ async function testVirtualHIDAndActions() {
     const submitCountBeforePlugin = harness.viewMessages.filter(({ message }) =>
       message.type === "run-command" && message.id === "composer.submit"
     ).length;
+    const focusCountBeforePlugin = harness.windowState.focusCount;
     const pluginText = "[@Linear](plugin://linear/issue) подготовь черновик";
     bridgePeer.send({
       v: PROTOCOL_VERSION,
@@ -737,7 +783,7 @@ async function testVirtualHIDAndActions() {
         text: pluginText,
       },
     });
-    assert.equal(harness.windowState.focusCount, 2);
+    assert.equal(harness.windowState.focusCount, focusCountBeforePlugin + 1);
     assert.equal(
       harness.viewMessages.filter(({ message }) =>
         message.type === "run-command" && message.id === "composer.submit"
@@ -830,6 +876,121 @@ async function testAuthenticationFailure() {
       /превысили 1 МиБ/,
     );
     assert.equal(connectionCount, 3);
+  } finally {
+    await harness.close();
+  }
+}
+
+async function testAutomaticReconnectAcrossBridgeSessions() {
+  let firstPeer;
+  const replacementPeers = [];
+  const harness = await createHarness({
+    reconnectable: true,
+    onConnection(socket) {
+      firstPeer = new JsonLinePeer(socket);
+    },
+  });
+
+  try {
+    const hid = Module._load("node-hid", CODEX_PARENT, false);
+    const openPromise = hid.HIDAsync.open(SYNTHETIC_PATH);
+    await waitUntil(() => firstPeer);
+    await firstPeer.next((message) => message.type === "hello");
+    firstPeer.send({
+      v: PROTOCOL_VERSION,
+      type: "hello-ack",
+      token: harness.token,
+    });
+    const device = await openPromise;
+    let closeCount = 0;
+    const asynchronousErrors = [];
+    device.on("close", () => { closeCount += 1; });
+    device.on("error", (error) => asynchronousErrors.push(error));
+
+    const replacement = await harness.replaceBridge({
+      advertisedToken: "c".repeat(64),
+      publishDescriptor: false,
+      token: "b".repeat(64),
+      onConnection(socket) {
+        replacementPeers.push(new JsonLinePeer(socket));
+      },
+    });
+
+    await waitUntil(() => device.socket === null);
+    device.publishCapabilities();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(asynchronousErrors, [], "capability polling must stay quiet while reconnecting");
+
+    harness.publishDescriptor("c".repeat(64), 0o644);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    assert.equal(
+      replacementPeers.length,
+      0,
+      "a reconnect descriptor with public permissions must be rejected",
+    );
+    harness.publishDescriptor("c".repeat(64));
+    await waitUntil(() => replacementPeers.length >= 1, 4_000);
+    const stalePeer = replacementPeers[0];
+    const staleHello = await stalePeer.next((message) => message.type === "hello");
+    assert.equal(staleHello.token, "c".repeat(64));
+    stalePeer.send({
+      v: PROTOCOL_VERSION,
+      type: "hello-ack",
+      token: replacement.token,
+    });
+
+    harness.publishDescriptor(replacement.token);
+    await waitUntil(() => replacementPeers.length >= 2, 4_000);
+    const recoveredPeer = replacementPeers.at(-1);
+    const recoveredHello = await recoveredPeer.next(
+      (message) => message.type === "hello",
+    );
+    assert.equal(recoveredHello.token, replacement.token);
+    assert.equal(recoveredHello.path, SYNTHETIC_PATH);
+    recoveredPeer.send({
+      v: PROTOCOL_VERSION,
+      type: "hello-ack",
+      token: replacement.token,
+    });
+    const recoveredCapabilities = await recoveredPeer.next((message) => message.type === "capabilities");
+    assert.equal(recoveredCapabilities.chatGPTVersion, SUPPORTED_VERSION);
+    assert.equal(recoveredCapabilities.chatGPTBuild, "5848");
+    assert.equal(recoveredCapabilities.requiredApis.microServiceHook, true);
+
+    harness.windowState.destroyed = true;
+    device.publishCapabilities();
+    await recoveredPeer.next((message) => message.type === "capabilities" && !message.requiredApis.rendererMessaging);
+    harness.windowState.destroyed = false;
+    device.publishCapabilities();
+    await recoveredPeer.next((message) => message.type === "capabilities" && message.requiredApis.rendererMessaging);
+
+    assert.equal(closeCount, 0, "a transient bridge restart must not close the virtual HID");
+    assert.equal(device.closed, false);
+    assert.deepEqual(asynchronousErrors, []);
+
+    recoveredPeer.send({
+      v: PROTOCOL_VERSION,
+      type: "app-action",
+      id: 901,
+      action: "run-command",
+      payload: { commandId: "composer.togglePlanMode" },
+    });
+    const actionResult = await recoveredPeer.next(
+      (message) => message.type === "app-action-result" && message.id === 901,
+    );
+    assert.equal(actionResult.ok, true);
+
+    const report = Buffer.alloc(REPORT_LENGTH, 0x5a);
+    assert.equal(await device.write(report), REPORT_LENGTH);
+    const hostReport = await recoveredPeer.next(
+      (message) => message.type === "host-report",
+    );
+    assert.deepEqual(Buffer.from(hostReport.data, "base64"), report);
+
+    const closeEvent = onceEvent(device, "close");
+    await device.close();
+    await closeEvent;
+    assert.equal(closeCount, 1, "an explicit close must remain terminal");
   } finally {
     await harness.close();
   }
@@ -981,21 +1142,41 @@ async function createHarness(options = {}) {
     commandIDs,
     electronAvailableDuringPreload = true,
     force = false,
-    onConnection = () => {},
+    onConnection: initialOnConnection = () => {},
+    reconnectable = false,
     version = SUPPORTED_VERSION,
     build = "5848",
     service = "codex-micro-service-CY8ASf0t.js",
   } = options;
-  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "nostromo-preload-test-"));
-  const socketPath = path.join(runtime, "bridge.sock");
-  const token = "deterministic-test-token";
+  const runtime = fs.mkdtempSync(path.join(
+    reconnectable ? "/tmp" : os.tmpdir(),
+    reconnectable ? "ncpt-" : "nostromo-preload-test-",
+  ));
+  const discoveryDirectory = path.join(
+    runtime,
+    `nostromo-codex-discovery-${typeof process.geteuid === "function" ? process.geteuid() : 0}`,
+  );
+  const discoveryPath = path.join(discoveryDirectory, "session.json");
+  if (reconnectable) fs.mkdirSync(discoveryDirectory, { mode: 0o700 });
+  let sessionSequence = 1;
+  let session = reconnectable
+    ? createReconnectableSession(runtime, sessionSequence)
+    : null;
+  let socketPath = session?.socketPath ?? path.join(runtime, "bridge.sock");
+  let token = reconnectable ? "a".repeat(64) : "deterministic-test-token";
+  let activeOnConnection = initialOnConnection;
   const sockets = new Set();
-  const server = net.createServer((socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-    onConnection(socket);
-  });
+  const makeServer = () => net.createServer((socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+      activeOnConnection(socket);
+    });
+  let server = makeServer();
   await listen(server, socketPath);
+  if (reconnectable) {
+    fs.chmodSync(socketPath, 0o600);
+    publishReconnectDescriptor(discoveryPath, session, token);
+  }
 
   const realHIDDescriptor = Object.freeze({
     path: "real://keyboard",
@@ -1020,6 +1201,7 @@ async function createHarness(options = {}) {
   const inputEvents = [];
   const evaluatedScripts = [];
   const submitDOM = createSubmitDOMHarness(options.submitDOM);
+  const projectDOM = createProjectDOMHarness(options.projectDOM);
   const windowState = {
     appFocusCount: 0,
     appShowCount: 0,
@@ -1069,6 +1251,9 @@ async function createHarness(options = {}) {
         }
         if (script.includes("NOSTROMO_CHAT_WORK_MODE_TOGGLE")) {
           return { ok: true, from: "Chat", to: "Work" };
+        }
+        if (script.includes("NOSTROMO_CLEAR_COMPOSER_PROJECT")) {
+          return projectDOM.evaluate(script);
         }
         return "high";
       },
@@ -1171,6 +1356,7 @@ async function createHarness(options = {}) {
   }
   process.env.NOSTROMO_CODEX_SOCKET = socketPath;
   process.env.NOSTROMO_CODEX_TOKEN = token;
+  if (reconnectable) process.env.NOSTROMO_CODEX_DISCOVERY = discoveryPath;
   process.env.NOSTROMO_CODEX_CHATGPT_VERSION = version;
   process.env.NOSTROMO_CODEX_CHATGPT_BUILD = build;
   process.env.NOSTROMO_CODEX_SERVICE_MODULE = `.vite/build/${service}`;
@@ -1192,6 +1378,7 @@ async function createHarness(options = {}) {
 
   assert.equal(process.env.NOSTROMO_CODEX_SOCKET, undefined);
   assert.equal(process.env.NOSTROMO_CODEX_TOKEN, undefined);
+  assert.equal(process.env.NOSTROMO_CODEX_DISCOVERY, undefined);
   assert.equal(process.env.NOSTROMO_CODEX_FORCE, undefined);
   assert.equal(process.env.NOSTROMO_CODEX_CHATGPT_VERSION, undefined);
   assert.equal(process.env.NOSTROMO_CODEX_CHATGPT_BUILD, undefined);
@@ -1207,11 +1394,48 @@ async function createHarness(options = {}) {
     realHIDDescriptor,
     realOpenCalls,
     realTopologyDescriptor,
-    socketPath,
+    projectDOM,
+    get socketPath() {
+      return socketPath;
+    },
     submitDOM,
-    token,
+    get token() {
+      return token;
+    },
     viewMessages,
     windowState,
+    publishDescriptor(advertisedToken = token, mode = 0o600) {
+      assert.ok(reconnectable);
+      publishReconnectDescriptor(discoveryPath, session, advertisedToken, mode);
+    },
+    async replaceBridge({
+      advertisedToken,
+      publishDescriptor: shouldPublishDescriptor = true,
+      token: nextToken,
+      onConnection,
+    }) {
+      assert.ok(reconnectable);
+      for (const socket of sockets) socket.destroy();
+      if (server.listening) await closeServer(server);
+      fs.rmSync(session.directory, { recursive: true, force: true });
+
+      sessionSequence += 1;
+      session = createReconnectableSession(runtime, sessionSequence);
+      socketPath = session.socketPath;
+      token = nextToken;
+      activeOnConnection = onConnection;
+      server = makeServer();
+      await listen(server, socketPath);
+      fs.chmodSync(socketPath, 0o600);
+      if (shouldPublishDescriptor) {
+        publishReconnectDescriptor(
+          discoveryPath,
+          session,
+          advertisedToken ?? token,
+        );
+      }
+      return { socketPath, token };
+    },
     async close() {
       Module._load = originalLoad;
       process.type = priorType;
@@ -1229,9 +1453,73 @@ async function createHarness(options = {}) {
         delete process.resourcesPath;
       }
       delete process.env.NODE_OPTIONS;
+      delete process.env.NOSTROMO_CODEX_DISCOVERY;
       for (const socket of sockets) socket.destroy();
       if (server.listening) await closeServer(server);
       fs.rmSync(runtime, { recursive: true, force: true });
+    },
+  };
+}
+
+function createReconnectableSession(runtimeRoot, sequence) {
+  const suffix = String(sequence).padStart(12, "0");
+  const runtimeID = `00000000-0000-4000-8000-${suffix}`.toUpperCase();
+  const directory = path.join(
+    runtimeRoot,
+    `nostromo-codex-runtime-${runtimeID}`,
+  );
+  fs.mkdirSync(directory, { mode: 0o700 });
+  const markerPath = path.join(directory, ".owner");
+  fs.writeFileSync(markerPath, JSON.stringify({
+    version: 1,
+    pid: process.pid,
+    runtimeID,
+  }), { mode: 0o600 });
+  return {
+    directory,
+    runtimeID,
+    socketPath: path.join(directory, "project2077.sock"),
+  };
+}
+
+function publishReconnectDescriptor(discoveryPath, session, token, mode = 0o600) {
+  const temporaryPath = `${discoveryPath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPath, JSON.stringify({
+    version: 1,
+    pid: process.pid,
+    runtimeID: session.runtimeID,
+    socketPath: session.socketPath,
+    token,
+  }), { mode });
+  fs.renameSync(temporaryPath, discoveryPath);
+  fs.chmodSync(discoveryPath, mode);
+}
+
+function createProjectDOMHarness(initial = {}) {
+  let buttonCount = 1;
+  let clickCount = 0;
+
+  function configure(next = {}) {
+    buttonCount = next.buttonCount ?? 1;
+    clickCount = 0;
+  }
+
+  configure(initial);
+
+  return {
+    configure,
+    get clickCount() {
+      return clickCount;
+    },
+    evaluate(script) {
+      assert.match(
+        script,
+        /button\[data-clear-project-button\]:not\(:disabled\)/,
+      );
+      if (buttonCount === 0) return { ok: false, reason: "missing" };
+      if (buttonCount > 1) return { ok: false, reason: "ambiguous" };
+      clickCount += 1;
+      return { ok: true };
     },
   };
 }

@@ -2,6 +2,10 @@
 import XCTest
 
 final class ChatGPTLauncherTests: XCTestCase {
+    func testCurrentVerifiedBuildIsAllowlisted() {
+        XCTAssertTrue(ChatGPTLauncher.supportedBuilds.contains("5973"))
+    }
+
     func testVerifiedCompleteBuildPassesCompatibilityGate() throws {
         let compatibility = ChatGPTCompatibility(
             version: "26.721.41059",

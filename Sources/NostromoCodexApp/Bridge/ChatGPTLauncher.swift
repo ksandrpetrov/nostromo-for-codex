@@ -135,6 +135,7 @@ final class ChatGPTLauncher: @unchecked Sendable {
     func launch(
         preloadURL: URL,
         socketPath: String,
+        sessionDescriptorPath: String,
         token: String,
         forceUnsupported: Bool
     ) async throws {
@@ -151,6 +152,7 @@ final class ChatGPTLauncher: @unchecked Sendable {
         }
 
         var environment = ProcessInfo.processInfo.environment
+        environment["NOSTROMO_CODEX_DISCOVERY"] = sessionDescriptorPath
         environment["NOSTROMO_CODEX_SOCKET"] = socketPath
         environment["NOSTROMO_CODEX_TOKEN"] = token
         environment["NOSTROMO_CODEX_FORCE"] = forceUnsupported ? "1" : "0"
