@@ -13,14 +13,14 @@ final class CodexCompatibilityTests: XCTestCase {
         XCTAssertNil(manifest.serviceModule(in: Data(repeating: 255, count: 32)))
     }
 
-    func testVersionBuildPairAndCandidateRemainExplicit() throws {
+    func testVerifiedVersionBuildPairsRemainExplicit() throws {
         let manifest = try XCTUnwrap(CodexCompatibilityManifest.load())
         XCTAssertEqual(manifest.entry(version: "26.721.41059", build: "5848")?.verified, true)
         XCTAssertEqual(manifest.entry(version: "26.721.81911", build: "5973")?.verified, true)
         XCTAssertNil(manifest.entry(version: "26.721.41059", build: "5973"))
-        XCTAssertEqual(manifest.entry(version: "26.903.61454", build: "8378")?.verified, false)
+        XCTAssertEqual(manifest.entry(version: "26.903.61454", build: "8378")?.verified, true)
         XCTAssertNil(manifest.entry(version: "future", build: "5848"))
-        XCTAssertFalse(ChatGPTLauncher.supportedBuilds.contains("8378"))
+        XCTAssertTrue(ChatGPTLauncher.supportedBuilds.contains("8378"))
     }
 
     func testCapabilitiesRequireEverySurfaceAndCurrentInstallation() {

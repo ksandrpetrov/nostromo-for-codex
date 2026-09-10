@@ -219,8 +219,10 @@ final class ChatGPTLauncher: @unchecked Sendable {
     func terminateRunningApplications() async {
         let applications = runningApplications()
         applications.forEach { $0.terminate() }
-        let deadline = Date().addingTimeInterval(8)
-        while Date() < deadline, isRunning() {
+        // Codex 8378 took 17 seconds to finish a graceful shutdown in live
+        // verification. Keep waiting before allowing a replacement process.
+        let deadline = Date().addingTimeInterval(30)
+        while !Task.isCancelled, Date() < deadline, isRunning() {
             try? await Task.sleep(for: .milliseconds(100))
         }
     }

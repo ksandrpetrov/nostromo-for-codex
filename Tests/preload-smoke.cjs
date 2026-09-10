@@ -105,7 +105,7 @@ async function runScenario(name) {
       await testVersionGate(true);
       return;
     case "candidate-version":
-      await testVersionGate(false, "26.903.61454", "8378");
+      await testVersionGate(false, "99.999.99999", "9999", true);
       return;
     case "version-build-mismatch":
       await testVersionGate(false, SUPPORTED_VERSION, "8378");
@@ -129,7 +129,7 @@ async function runScenario(name) {
       await testAuthenticationFailure();
       return;
     case "renamed-service": {
-      const harness = await createHarness({ version: "26.903.61454", build: "8378", force: true, service: "service-BuBDjGBu.js" });
+      const harness = await createHarness({ version: "26.903.61454", build: "8378", service: "service-BuBDjGBu.js" });
       try {
         const parent = { filename: "/mock/app.asar/.vite/build/service-BuBDjGBu.js" };
         const topology = Module._load("hid-topology-watcher.node", parent, false);
@@ -298,11 +298,12 @@ async function testEarlyElectronUnavailable() {
   }
 }
 
-async function testVersionGate(force, version = "99.999.99999", build = "5848") {
+async function testVersionGate(force, version = "99.999.99999", build = "5848", candidate = false) {
   const harness = await createHarness({
     version,
     build,
     force,
+    candidate,
   });
   try {
     const hid = Module._load("node-hid", CODEX_PARENT, false);
@@ -1147,11 +1148,25 @@ async function createHarness(options = {}) {
     version = SUPPORTED_VERSION,
     build = "5848",
     service = "codex-micro-service-CY8ASf0t.js",
+    candidate = false,
   } = options;
   const runtime = fs.mkdtempSync(path.join(
     reconnectable ? "/tmp" : os.tmpdir(),
     reconnectable ? "ncpt-" : "nostromo-preload-test-",
   ));
+  let preloadPath = PRELOAD_PATH;
+  if (candidate) {
+    // Keep candidate rejection covered without adding fake builds to the
+    // production allowlist or modifying a live app's resources.
+    preloadPath = path.join(runtime, "chatgpt-preload.cjs");
+    fs.copyFileSync(PRELOAD_PATH, preloadPath);
+    preloadPath = fs.realpathSync(preloadPath);
+    const manifest = JSON.parse(fs.readFileSync(
+      path.join(path.dirname(PRELOAD_PATH), "codex-compatibility.json"), "utf8",
+    ));
+    manifest.builds.push({ version, build, adapter: "micro-v1", verified: false });
+    fs.writeFileSync(path.join(runtime, "codex-compatibility.json"), JSON.stringify(manifest));
+  }
   const discoveryDirectory = path.join(
     runtime,
     `nostromo-codex-discovery-${typeof process.geteuid === "function" ? process.geteuid() : 0}`,
@@ -1367,10 +1382,10 @@ async function createHarness(options = {}) {
     configurable: true,
     value: "39.0.0",
   });
-  process.env.NODE_OPTIONS = `--trace-warnings --require=${PRELOAD_PATH}`;
+  process.env.NODE_OPTIONS = `--trace-warnings --require=${preloadPath}`;
 
   try {
-    require(PRELOAD_PATH);
+    require(preloadPath);
   } finally {
     loadingPreload = false;
   }

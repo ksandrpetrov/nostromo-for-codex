@@ -3,7 +3,7 @@
   "builds": [
     { "version": "26.721.41059", "build": "5848", "adapter": "micro-v1", "verified": true },
     { "version": "26.721.81911", "build": "5973", "adapter": "micro-v1", "verified": true },
-    { "version": "26.903.61454", "build": "8378", "adapter": "micro-v1", "verified": false }
+    { "version": "26.903.61454", "build": "8378", "adapter": "micro-v1", "verified": true }
   ],
   "serviceMarkers": ["@worklouder/device-kit-oai", "exports.CodexMicroService=", "updateLighting(", "findCodexMicroInterfaces"],
   "rendererMarkers": ["codex_desktop:message-for-view", "composer.submit", "data-codex-composer-root", "M4.5 5.75C4.5 5.05964 5.05964 4.5", "size-token-button-composer", "skills/list", "codex-micro-push-to-talk-start", "codex-micro-push-to-talk-stop", "codex-micro-insert-composer-text", "codex-micro-insert-skill-mention"]

@@ -152,6 +152,9 @@ final class LiveChatGPTE2ETests: XCTestCase {
         for commandID in [
             "nextThread",
             "previousThread",
+            // Navigate to an unsent draft before testing composer modes,
+            // insertion, PTT and Stop. Never target the user's active task.
+            "newTask",
             "composer.togglePlanMode",
             "composer.togglePlanMode",
             "composer.toggleFastMode",
