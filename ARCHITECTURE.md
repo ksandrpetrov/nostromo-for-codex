@@ -43,6 +43,17 @@ slots через `BridgeWireCodec` в `AppModel`, после чего обнов
 - `BridgeWireCodec` является чистой границей protocol v2 и не владеет I/O.
 - preload dependency-free, compatibility-gated и никогда не изменяет
   `ChatGPT.app`.
+- `CodexCompatibilityManifest` читает общий с preload manifest и находит
+  единственный сервис Micro по контракту в ASAR. Имя bundle chunk не является
+  контрактом. Кандидат сборки остаётся непроверенным до opt-in live-теста.
+- `CodexFallbackController` выполняет только пять базовых menu actions через
+  Accessibility после активации конкретного приложения. Он не посылает
+  глобальные клавиши, не использует приватные API и не повторяет действия
+  с неизвестным результатом после разрыва моста.
+- `AppModel` наблюдает за identity установленного bundle; при замене сбрасывает
+  capabilities и активный ввод. Полный режим требует handshake с той же
+  версией/build и подтверждёнными runtime API; authentication сокета
+  сам по себе готовности не означает.
 
 ## Контракты, которые меняются вместе
 
@@ -75,6 +86,9 @@ invariants отклоняются.
 - Momentary profile никогда не заменяет persistent active profile на диске.
 - Неизвестная ChatGPT build блокируется; expert override не обходит
   отсутствие обязательных private modules.
+- При недоступности приватного моста доступны только явно перечисленные в
+  metadata каталога базовые команды. Удержанные при смене соединения кнопки
+  требуют отпускания; старые события и результаты не повторяются через резерв.
 - Старые runtime directories удаляются только для доказанно мёртвого PID и
   после повторной проверки owner marker/inode.
 - После terminal bridge stop не публикуются `.listening`, `.connected` или

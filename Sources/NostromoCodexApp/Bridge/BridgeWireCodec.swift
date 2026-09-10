@@ -58,7 +58,10 @@ enum BridgeWireCodec {
             commandIDs: Set(commandIDs),
             commandRegistrySource: source,
             requiredAPIs: requiredAPIs,
-            unavailableFeatures: unavailable
+            unavailableFeatures: unavailable,
+            chatGPTVersion: (object["chatGPTVersion"] as? String).flatMap { $0.count <= 64 ? $0 : nil },
+            chatGPTBuild: (object["chatGPTBuild"] as? String).flatMap { $0.count <= 32 ? $0 : nil },
+            adapterID: (object["adapterID"] as? String).flatMap { $0.count <= 64 ? $0 : nil }
         )
     }
 

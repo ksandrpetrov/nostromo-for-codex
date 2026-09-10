@@ -155,6 +155,8 @@ verify_bundle() {
   }
   plutil -lint "$app_dir/Contents/Info.plist"
   cmp "$preload_file" "$app_dir/Contents/Resources/chatgpt-preload.cjs"
+  cmp "$project_dir/Sources/NostromoCodexApp/Resources/codex-compatibility.json" \
+    "$app_dir/Contents/Resources/codex-compatibility.json"
 
   local executable_name=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" \
     "$app_dir/Contents/Info.plist")

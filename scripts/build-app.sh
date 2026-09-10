@@ -32,6 +32,8 @@ cp "$build_dir/NostromoCodex" "$contents_dir/MacOS/NostromoCodex"
 cp "$project_dir/Resources/Info.plist" "$contents_dir/Info.plist"
 cp "$project_dir/Sources/NostromoCodexApp/Resources/chatgpt-preload.cjs" \
   "$contents_dir/Resources/chatgpt-preload.cjs"
+cp "$project_dir/Sources/NostromoCodexApp/Resources/codex-compatibility.json" \
+  "$contents_dir/Resources/codex-compatibility.json"
 "$project_dir/scripts/build-icon.sh" \
   "$project_dir/Resources/AppIcon.png" \
   "$contents_dir/Resources/AppIcon.icns"

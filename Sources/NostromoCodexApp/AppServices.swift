@@ -181,6 +181,8 @@ protocol NostromoKeyboardSuppressing: AnyObject {
 
 protocol ChatGPTLaunching: AnyObject, Sendable {
     func compatibility() -> ChatGPTCompatibility
+    func installationIdentifier() -> String
+    func launchNormally() async throws
     func isRunning() -> Bool
     func isActive() -> Bool
     @discardableResult
@@ -192,6 +194,11 @@ protocol ChatGPTLaunching: AnyObject, Sendable {
         forceUnsupported: Bool
     ) async throws
     func terminateRunningApplications() async
+}
+
+extension ChatGPTLaunching {
+    func installationIdentifier() -> String { "injected-launcher" }
+    func launchNormally() async throws { throw LaunchError.launchFailed }
 }
 
 protocol ShortcutPosting: Sendable {

@@ -22,11 +22,23 @@ const MAX_BUFFER = 1024 * 1024;
 const OPEN_TIMEOUT_MS = 2000;
 const VIEW_MESSAGE_CHANNEL = "codex_desktop:message-for-view";
 const SYNTHETIC_PATH = "nostromo-codex://project2077";
-const SUPPORTED_VERSIONS = new Set(["26.721.41059"]);
+const COMPATIBILITY = (() => {
+  try {
+    const file = path.join(__dirname, "codex-compatibility.json");
+    if (fs.statSync(file).size > 65536) return { schemaVersion: 0, builds: [] };
+    const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!Array.isArray(manifest.builds)) return { schemaVersion: 0, builds: [] };
+    return manifest;
+  } catch { return { schemaVersion: 0, builds: [] }; }
+})();
 const SOCKET_PATH = process.env.NOSTROMO_CODEX_SOCKET;
 const TOKEN = process.env.NOSTROMO_CODEX_TOKEN;
 const FORCE = process.env.NOSTROMO_CODEX_FORCE === "1";
 const CHATGPT_VERSION = process.env.NOSTROMO_CODEX_CHATGPT_VERSION;
+const CHATGPT_BUILD = process.env.NOSTROMO_CODEX_CHATGPT_BUILD;
+const SERVICE_MODULE = process.env.NOSTROMO_CODEX_SERVICE_MODULE;
+const ADAPTER_ID = process.env.NOSTROMO_CODEX_ADAPTER;
+const hookState = { hid: false, topology: false, service: false };
 const TASK_STATUSES = new Set([
   "off",
   "working",
@@ -153,7 +165,12 @@ function assertCompatible() {
   if (!CHATGPT_VERSION) {
     throw new Error("Версия ChatGPT не передана нативным лаунчером");
   }
-  if (!SUPPORTED_VERSIONS.has(CHATGPT_VERSION) && !FORCE) {
+  if (COMPATIBILITY.schemaVersion !== 1 || !CHATGPT_BUILD ||
+      !/^\.vite\/build\/[A-Za-z0-9_-]+\.js$/.test(SERVICE_MODULE || "") || ADAPTER_ID !== "micro-v1") {
+    throw new Error("Не передан проверенный контракт адаптера ChatGPT");
+  }
+  const entry = COMPATIBILITY.builds.find((item) => item.version === CHATGPT_VERSION && item.build === CHATGPT_BUILD);
+  if (!(entry?.verified && entry.adapter === ADAPTER_ID) && !FORCE) {
     throw new Error(`Неподдерживаемая версия ChatGPT: ${CHATGPT_VERSION}`);
   }
 }
@@ -166,17 +183,32 @@ class VirtualHIDAsyncDevice extends EventEmitter {
     this.closed = false;
     this.pushToTalkActive = false;
     this.taskSlotsDigest = null;
+    this.capabilityDigest = null;
+    this.capabilityTimer = setInterval(() => this.publishCapabilities(), 2000);
+    this.capabilityTimer.unref();
     this.actionQueue = Promise.resolve();
     virtualDevices.add(this);
     socket.setEncoding("utf8");
     socket.on("data", (chunk) => this.receive(chunk));
     socket.on("error", (error) => this.emitAsyncError(error));
     socket.on("close", () => {
+      clearInterval(this.capabilityTimer);
       this.closed = true;
       virtualDevices.delete(this);
       this.stopPushToTalkFailSafe();
       this.emit("close");
     });
+  }
+
+  publishCapabilities() {
+    if (this.closed) return;
+    try {
+      const manifest = runtimeCapabilityManifest();
+      const digest = JSON.stringify(manifest);
+      if (digest === this.capabilityDigest) return;
+      this.capabilityDigest = digest;
+      this.writeLine(manifest).catch((error) => this.emitAsyncError(error));
+    } catch (error) { this.emitAsyncError(error); }
   }
 
   static open() {
@@ -237,7 +269,7 @@ class VirtualHIDAsyncDevice extends EventEmitter {
           cleanup();
           const device = new VirtualHIDAsyncDevice(socket);
           if (buffer) device.receive(buffer);
-          device.writeLine(runtimeCapabilityManifest()).catch((error) => device.emitAsyncError(error));
+          device.publishCapabilities();
           device.publishRuntimeState();
           device.publishTaskSlots(latestTaskSlotsMessage);
           resolve(device);
@@ -277,6 +309,7 @@ class VirtualHIDAsyncDevice extends EventEmitter {
   async close() {
     if (this.closed) return;
     this.closed = true;
+    clearInterval(this.capabilityTimer);
     await new Promise((resolve) => {
       this.socket.once("close", resolve);
       this.socket.end();
@@ -456,7 +489,7 @@ function asyncOrSyncDeviceList(target, property, receiver) {
 }
 
 function appendSyntheticDescriptor(devices) {
-  if (!Array.isArray(devices) || !bridgeAvailable()) return devices;
+  if (!Array.isArray(devices) || !hookState.service || !bridgeAvailable()) return devices;
   if (devices.some((device) =>
     device &&
     device.vendorId === DESCRIPTOR.vendorId &&
@@ -810,7 +843,7 @@ async function toggleChatWorkMode() {
 
 function discoverCommandIDs() {
   const fallback = {
-    commandIds: new Set(SAFE_COMMAND_CANDIDATES),
+    commandIds: new Set(COMPATIBILITY.builds.some((entry) => entry.verified && entry.version === CHATGPT_VERSION && entry.build === CHATGPT_BUILD) ? SAFE_COMMAND_CANDIDATES : []),
     source: "verified-fallback",
   };
   if (!process.resourcesPath) return fallback;
@@ -862,9 +895,13 @@ function runtimeCapabilityManifest() {
       browserWindow: typeof BrowserWindow?.getAllWindows === "function",
       rendererMessaging: Boolean(usableWindow()?.webContents?.send),
       rendererEvaluation: Boolean(usableWindow()?.webContents?.executeJavaScript),
-      scopedHidHook: isMainThread && process.type === "browser",
+      scopedHidHook: hookState.hid,
+      microServiceHook: hookState.service,
     },
     unavailableFeatures,
+    chatGPTVersion: CHATGPT_VERSION,
+    chatGPTBuild: CHATGPT_BUILD,
+    adapterID: ADAPTER_ID,
   };
 }
 
@@ -996,31 +1033,37 @@ function installScopedHooks() {
     const filename = parent && typeof parent.filename === "string" ? parent.filename : "";
     if (
       typeof request === "string" &&
-      /codex-micro-service-[^\\/]+\.js$/.test(request) &&
+      path.resolve(path.dirname(filename), request).endsWith(`/${SERVICE_MODULE}`) &&
       /[\\/]main-[^\\/]+\.js$/.test(filename)
     ) {
       const real = Reflect.apply(originalLoad, this, [request, parent, isMain]);
-      codexMicroServiceModuleProxy ||= createCodexMicroServiceModuleProxy(real);
+      try { codexMicroServiceModuleProxy ||= createCodexMicroServiceModuleProxy(real); }
+      catch (error) { log(String(error)); return real; }
+      hookState.service = true;
       return codexMicroServiceModuleProxy;
     }
     if (
       request === "node-hid" &&
       (
-        /codex-micro-service-/.test(filename) ||
+        filename.endsWith(`/${SERVICE_MODULE}`) ||
         /[\\/]@worklouder[\\/](?:device-kit-oai|wl-device-kit)[\\/]/.test(filename)
       )
     ) {
       const real = Reflect.apply(originalLoad, this, [request, parent, isMain]);
-      hidProxy ||= createNodeHidProxy(real);
+      try { hidProxy ||= createNodeHidProxy(real); }
+      catch (error) { log(String(error)); return real; }
+      hookState.hid = true;
       return hidProxy;
     }
     if (
       typeof request === "string" &&
       /hid[-_]topology[-_]watcher\.node$/.test(request) &&
-      /codex-micro-service-/.test(filename)
+      filename.endsWith(`/${SERVICE_MODULE}`)
     ) {
       const real = Reflect.apply(originalLoad, this, [request, parent, isMain]);
-      topologyProxy ||= createTopologyProxy(real);
+      try { topologyProxy ||= createTopologyProxy(real); }
+      catch (error) { log(String(error)); return real; }
+      hookState.topology = true;
       return topologyProxy;
     }
     return Reflect.apply(originalLoad, this, [request, parent, isMain]);
@@ -1042,6 +1085,9 @@ function stripManagedEnvironment() {
   delete process.env.NOSTROMO_CODEX_TOKEN;
   delete process.env.NOSTROMO_CODEX_FORCE;
   delete process.env.NOSTROMO_CODEX_CHATGPT_VERSION;
+  delete process.env.NOSTROMO_CODEX_CHATGPT_BUILD;
+  delete process.env.NOSTROMO_CODEX_SERVICE_MODULE;
+  delete process.env.NOSTROMO_CODEX_ADAPTER;
 }
 
 installScopedHooks();

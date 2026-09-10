@@ -6,6 +6,80 @@ import XCTest
 
 @MainActor
 final class AppModelTests: XCTestCase {
+    func testShutdownCancelsFallbackWaitingForActivation() async {
+        let fixture = makeFixture()
+        fixture.fallback.delay = .milliseconds(100)
+        fixture.model.setBinding(.codexAction("newTask"), for: .key01)
+        fixture.bridge.onStatus?(.listening)
+        await settle()
+        fixture.hid.emitButton(.key01, pressed: true, configuration: fixture.model.configuration)
+        await settle()
+        fixture.model.shutdown()
+        try? await Task.sleep(for: .milliseconds(120))
+        XCTAssertTrue(fixture.fallback.actions.isEmpty)
+        XCTAssertFalse(fixture.bridge.actions.contains(.runCommand(id: "newTask")))
+    }
+
+    func testDisconnectedBridgeUsesOnlyBasicFallbackOnFreshPress() async {
+        let fixture = makeFixture()
+        fixture.model.setBinding(.codexAction("newTask"), for: .key01)
+        fixture.bridge.onStatus?(.listening)
+        await settle()
+        fixture.hid.emitButton(.key01, pressed: true, configuration: fixture.model.configuration)
+        await settle()
+        XCTAssertEqual(fixture.fallback.actions, [.newTask])
+        XCTAssertFalse(fixture.bridge.actions.contains(.runCommand(id: "newTask")))
+    }
+
+    func testFallbackBlocksConsequentialActionsAndPermissionFailure() async {
+        let fixture = makeFixture()
+        fixture.model.setBinding(.codexAction("approval.approve"), for: .key01)
+        fixture.bridge.onStatus?(.listening)
+        await settle()
+        fixture.hid.emitButton(.key01, pressed: true, configuration: fixture.model.configuration)
+        await settle()
+        XCTAssertTrue(fixture.fallback.actions.isEmpty)
+        XCTAssertFalse(fixture.bridge.actions.contains(.runCommand(id: "approval.approve")))
+        fixture.hid.emitButton(.key01, pressed: false, configuration: fixture.model.configuration)
+        await settle()
+        fixture.model.setBinding(.codexAction("newTask"), for: .key01)
+        fixture.fallback.hasAccess = false
+        fixture.hid.emitButton(.key01, pressed: true, configuration: fixture.model.configuration, timestamp: 2)
+        await settle()
+        XCTAssertTrue(fixture.fallback.actions.isEmpty)
+        XCTAssertNotNil(fixture.model.lastError)
+    }
+
+    func testUnsupportedRestartPreservesRunningApplication() async {
+        let fixture = makeFixture()
+        fixture.launcher.setCompatibility(ChatGPTCompatibility(version: "future", build: "9999", supported: false))
+        fixture.model.restartThroughNostromo()
+        await settle()
+        XCTAssertEqual(fixture.launcher.terminateCalls, 0)
+        XCTAssertEqual(fixture.launcher.launchCalls, 0)
+        XCTAssertNotNil(fixture.model.lastError)
+    }
+
+    func testInstallationChangeInvalidatesOldCapabilitiesWithoutEditingProfiles() async {
+        let fixture = makeFixture()
+        await settle()
+        fixture.model.refreshChatGPTConnection()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let configuration = try? encoder.encode(fixture.model.configuration)
+        XCTAssertTrue(fixture.model.fullBridgeReady)
+        XCTAssertTrue(fixture.hid.lightingSummaries.last?.blue ?? false)
+        fixture.launcher.setCompatibility(ChatGPTCompatibility(version: "future", build: "9999", supported: false))
+        fixture.model.refreshChatGPTConnection()
+        XCTAssertFalse(fixture.model.fullBridgeReady)
+        XCTAssertNil(fixture.model.runtimeCapabilities)
+        XCTAssertEqual(try? encoder.encode(fixture.model.configuration), configuration)
+        XCTAssertEqual(fixture.launcher.terminateCalls, 0)
+        XCTAssertFalse(fixture.hid.lightingSummaries.last?.red ?? true)
+        XCTAssertFalse(fixture.hid.lightingSummaries.last?.green ?? true)
+        XCTAssertFalse(fixture.hid.lightingSummaries.last?.blue ?? true)
+    }
+
     func testMappingWorkspaceRendersAllBindingKindsAtMinimumWindowSize() throws {
         let fixture = makeFixture()
         fixture.model.preferences.markSetupCompleted(autoLaunch: false)
@@ -111,7 +185,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.bridgeStatus, .failed(
             "Не удалось запустить приватное подключение к Codex: read-only runtime directory"
         ))
-        XCTAssertEqual(model.readiness, .bridgeUnavailable)
+        XCTAssertEqual(model.readiness, .fallback)
         XCTAssertEqual(
             model.lastError,
             "Не удалось запустить приватное подключение к Codex: read-only runtime directory"
@@ -205,10 +279,11 @@ final class AppModelTests: XCTestCase {
         fixture.hid.emit(state: .waitingForPermission)
         await settle()
 
+        let lightingCount = fixture.hid.lightingSummaries.count
         fixture.model.refreshInputMonitoringAfterSettings()
 
         XCTAssertEqual(fixture.hid.startCalls, 1)
-        XCTAssertEqual(fixture.hid.lightingSummaries.count, 1)
+        XCTAssertEqual(fixture.hid.lightingSummaries.count, lightingCount + 1)
     }
 
     func testControllerAlwaysRequestsExclusiveCapture() {
@@ -539,6 +614,7 @@ final class AppModelTests: XCTestCase {
         let model = fixture.model
         model.setBinding(.codexAction("pushToTalk"), for: .key01)
         fixture.bridge.onStatus?(.connected)
+        fixture.bridge.onCapabilities?(completeTestCapabilities())
         await settle()
 
         fixture.hid.emitButton(.key01, pressed: true, configuration: model.configuration)
@@ -550,6 +626,12 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(fixture.bridge.actions.last?.name, "push-to-talk-stop")
 
         fixture.bridge.onStatus?(.connected)
+        fixture.bridge.onCapabilities?(completeTestCapabilities())
+        fixture.hid.emitButton(.key01, pressed: true, configuration: model.configuration)
+        await settle()
+        XCTAssertNotEqual(fixture.bridge.actions.last?.name, "push-to-talk-start")
+        fixture.hid.emitButton(.key01, pressed: false, configuration: model.configuration)
+        await settle()
         fixture.hid.emitButton(.key01, pressed: true, configuration: model.configuration)
         await settle()
         XCTAssertEqual(fixture.bridge.actions.last?.name, "push-to-talk-start")
@@ -561,6 +643,7 @@ final class AppModelTests: XCTestCase {
         model.setBinding(.taskSlot(3), for: .key01)
 
         fixture.bridge.onStatus?(.connected)
+        fixture.bridge.onCapabilities?(completeTestCapabilities())
         fixture.bridge.onTaskSlots?([
             CodexTaskSlot(
                 id: 3,
@@ -1152,6 +1235,7 @@ final class AppModelTests: XCTestCase {
         let fixture = makeFixture()
 
         fixture.bridge.onStatus?(.connected)
+        fixture.bridge.onCapabilities?(completeTestCapabilities())
         await settle()
         XCTAssertFalse(fixture.hid.lightingSummaries.last?.red ?? true)
         XCTAssertFalse(fixture.hid.lightingSummaries.last?.green ?? true)
@@ -1289,6 +1373,7 @@ final class AppModelTests: XCTestCase {
     func testTaskIndicatorPriorityPrefersAttentionOverConcurrentWork() async {
         let fixture = makeFixture()
         fixture.bridge.onStatus?(.connected)
+        fixture.bridge.onCapabilities?(completeTestCapabilities())
         fixture.bridge.onTaskSlots?([
             CodexTaskSlot(
                 id: 0,
@@ -1313,6 +1398,7 @@ final class AppModelTests: XCTestCase {
     func testCodexMicroInactivityBlackoutCannotClearWorkingTaskIndicator() async throws {
         let fixture = makeFixture()
         fixture.bridge.onStatus?(.connected)
+        fixture.bridge.onCapabilities?(completeTestCapabilities())
         fixture.bridge.onTaskSlots?([
             CodexTaskSlot(
                 id: 0,
@@ -1589,6 +1675,7 @@ final class AppModelTests: XCTestCase {
         let launcher = FakeLauncher()
         let shortcutPoster = FakeShortcutPoster(access: shortcutAccess)
         let keyboardSuppressor = FakeKeyboardSuppressor()
+        let fallback = FakeFallbackController()
         let model = AppModel(
             store: store,
             launcher: launcher,
@@ -1596,8 +1683,13 @@ final class AppModelTests: XCTestCase {
             bridge: bridge,
             shortcutPoster: shortcutPoster,
             keyboardSuppressor: keyboardSuppressor,
+            fallbackController: fallback,
             hidOnlyMode: hidOnlyMode
         )
+        if !hidOnlyMode {
+            model.bridgeStatus = .connected
+            bridge.onCapabilities?(completeTestCapabilities())
+        }
         // Most AppModel tests exercise mapping/dispatch rather than connection
         // setup. Model that precondition explicitly: production HID events are
         // delivered only after the manager has opened the device.
@@ -1610,7 +1702,8 @@ final class AppModelTests: XCTestCase {
             hid: hid,
             launcher: launcher,
             shortcutPoster: shortcutPoster,
-            keyboardSuppressor: keyboardSuppressor
+            keyboardSuppressor: keyboardSuppressor,
+            fallback: fallback
         )
     }
 }
@@ -1623,6 +1716,28 @@ private struct AppFixture {
     let launcher: FakeLauncher
     let shortcutPoster: FakeShortcutPoster
     let keyboardSuppressor: FakeKeyboardSuppressor
+    let fallback: FakeFallbackController
+}
+
+private func completeTestCapabilities() -> ChatGPTRuntimeCapabilities {
+    ChatGPTRuntimeCapabilities(
+        commandIDs: Set(CodexActionCatalog.verified.map(\.id)), commandRegistrySource: "test",
+        requiredAPIs: ["browserWindow": true, "rendererMessaging": true, "rendererEvaluation": true, "scopedHidHook": true, "microServiceHook": true],
+        unavailableFeatures: [], chatGPTVersion: "26.721.41059", chatGPTBuild: "5848", adapterID: "micro-v1"
+    )
+}
+
+@MainActor
+private final class FakeFallbackController: CodexFallbackControlling {
+    var hasAccess = true
+    var delay: Duration?
+    var actions: [CodexFallbackAction] = []
+    func perform(_ action: CodexFallbackAction) async throws {
+        guard hasAccess else { throw CodexFallbackError.permission }
+        if let delay { try await Task.sleep(for: delay) }
+        try Task.checkCancellation()
+        actions.append(action)
+    }
 }
 
 private final class FakeBridge: BridgeServing, @unchecked Sendable {
@@ -1767,6 +1882,10 @@ private final class FakeLauncher: ChatGPTLaunching, @unchecked Sendable {
     private var activeStorage = false
     private var launchCountStorage = 0
     private var terminateCountStorage = 0
+    private var compatibilityStorage = ChatGPTCompatibility(version: "26.721.41059", build: "5848", supported: true)
+
+    func setCompatibility(_ value: ChatGPTCompatibility) { lock.withLock { compatibilityStorage = value } }
+    func installationIdentifier() -> String { lock.withLock { compatibilityStorage.version + compatibilityStorage.build } }
 
     var launchCalls: Int {
         lock.lock()
@@ -1785,7 +1904,7 @@ private final class FakeLauncher: ChatGPTLaunching, @unchecked Sendable {
     }
 
     func compatibility() -> ChatGPTCompatibility {
-        ChatGPTCompatibility(version: "26.721.41059", build: "5848", supported: true)
+        lock.withLock { compatibilityStorage }
     }
 
     func isRunning() -> Bool { true }

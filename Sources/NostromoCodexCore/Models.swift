@@ -460,6 +460,10 @@ public struct AppConfiguration: Codable, Sendable {
     }
 }
 
+public enum CodexFallbackAction: String, CaseIterable, Sendable {
+    case newTask, previousThread, nextThread, toggleSidebar, settings
+}
+
 public struct CodexActionDescriptor: Identifiable, Hashable, Sendable {
     public enum Category: String, CaseIterable, Sendable {
         case chat = "Чат"
@@ -479,6 +483,7 @@ public struct CodexActionDescriptor: Identifiable, Hashable, Sendable {
     public var execution: CodexActionExecution
     public var consequential: Bool
     public var requiresRuntimeRegistration: Bool
+    public var fallback: CodexFallbackAction?
 
     public init(
         id: String,
@@ -488,7 +493,8 @@ public struct CodexActionDescriptor: Identifiable, Hashable, Sendable {
         available: Bool = true,
         execution: CodexActionExecution = .runtimeCommand,
         consequential: Bool = false,
-        requiresRuntimeRegistration: Bool = true
+        requiresRuntimeRegistration: Bool = true,
+        fallback: CodexFallbackAction? = nil
     ) {
         self.id = id
         self.title = title
@@ -498,6 +504,7 @@ public struct CodexActionDescriptor: Identifiable, Hashable, Sendable {
         self.execution = execution
         self.consequential = consequential
         self.requiresRuntimeRegistration = requiresRuntimeRegistration
+        self.fallback = fallback
     }
 }
 
@@ -539,12 +546,12 @@ public enum CodexActionCatalog {
         .init(id: "composer.stop", title: "Остановить", detail: "Остановить текущий ответ", category: .chat, execution: .stopActive, consequential: true, requiresRuntimeRegistration: false),
         .init(id: "composer.submit", title: "Отправить", detail: "Отправить содержимое поля ввода", category: .chat, execution: .submitActiveComposer, consequential: true),
         .init(id: "pushToTalk", title: "Диктовка", detail: "Удерживайте для диктовки; двойное нажатие фиксирует микрофон", category: .chat, execution: .pushToTalk, requiresRuntimeRegistration: false),
-        .init(id: "newTask", title: "Новая задача", detail: "Открыть новую локальную задачу", category: .chat),
+        .init(id: "newTask", title: "Новая задача", detail: "Открыть новую локальную задачу", category: .chat, fallback: .newTask),
         .init(id: "forkThread", title: "Ответвить задачу", detail: "Продолжить в новой задаче", category: .chat),
         .init(id: "openSideChat", title: "Боковой чат", detail: "Открыть временный боковой чат", category: .chat),
-        .init(id: "previousThread", title: "Предыдущая задача", detail: "Перейти назад", category: .navigation),
-        .init(id: "nextThread", title: "Следующая задача", detail: "Перейти вперёд", category: .navigation),
-        .init(id: "toggleSidebar", title: "Боковая панель", detail: "Показать или скрыть боковую панель", category: .panels),
+        .init(id: "previousThread", title: "Предыдущая задача", detail: "Перейти назад", category: .navigation, fallback: .previousThread),
+        .init(id: "nextThread", title: "Следующая задача", detail: "Перейти вперёд", category: .navigation, fallback: .nextThread),
+        .init(id: "toggleSidebar", title: "Боковая панель", detail: "Показать или скрыть боковую панель", category: .panels, fallback: .toggleSidebar),
         .init(id: "toggleTerminal", title: "Терминал", detail: "Показать или скрыть терминал", category: .panels),
         .init(id: "toggleReviewTab", title: "Панель проверки", detail: "Показать или скрыть проверку", category: .panels),
         .init(id: "openBrowserTab", title: "Браузер", detail: "Открыть браузер Codex", category: .panels),
@@ -557,7 +564,7 @@ public enum CodexActionCatalog {
         .init(id: "openSkills", title: "Навыки", detail: "Открыть навыки", category: .settings),
         .init(id: "mcpSettings", title: "Плагины и MCP", detail: "Открыть настройки плагинов и MCP", category: .settings),
         .init(id: "manageTasks", title: "Расписание", detail: "Открыть запланированные задачи", category: .settings),
-        .init(id: "settings", title: "Настройки", detail: "Открыть настройки ChatGPT", category: .settings),
+        .init(id: "settings", title: "Настройки", detail: "Открыть настройки ChatGPT", category: .settings, fallback: .settings),
         .init(
             id: "focusChatGPT",
             title: "Перейти к ChatGPT",
@@ -570,6 +577,17 @@ public enum CodexActionCatalog {
 
     public static func descriptor(for id: String) -> CodexActionDescriptor? {
         verified.first(where: { $0.id == id })
+    }
+
+    public static var fallbackCatalog: [CodexActionDescriptor] {
+        verified.map { descriptor in
+            var result = descriptor
+            result.available = descriptor.fallback != nil && !descriptor.consequential
+            result.detail = result.available
+                ? descriptor.detail + " · базовый режим через меню macOS"
+                : "Требуется полное подключение к Codex."
+            return result
+        }
     }
 
     public static func runtimeCatalog(commandIDs: Set<String>?) -> [CodexActionDescriptor] {

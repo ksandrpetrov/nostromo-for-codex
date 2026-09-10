@@ -46,10 +46,12 @@ final class LiveChatGPTE2ETests: XCTestCase {
         }
 
         let compatibility = launcher.compatibility()
-        XCTAssertEqual(compatibility.version, "26.721.41059")
-        XCTAssertEqual(compatibility.build, "5848")
-        XCTAssertTrue(compatibility.supported)
-        XCTAssertTrue(compatibility.requiredModulesPresent)
+        let manifest = try XCTUnwrap(CodexCompatibilityManifest.load())
+        let adapter = try XCTUnwrap(manifest.entry(version: compatibility.version, build: compatibility.build))
+        try XCTSkipUnless(compatibility.requiredModulesPresent, "Installed bundle does not match the adapter contract.")
+        // The explicit live opt-in may validate a prepared candidate, but it
+        // never changes the production allowlist or the user's configuration.
+        model.setForceUnsupported(!adapter.verified)
 
         await launcher.terminateRunningApplications()
         try XCTSkipIf(
@@ -65,11 +67,11 @@ final class LiveChatGPTE2ETests: XCTestCase {
             preloadURL: preload,
             socketPath: bridge.socketPath,
             token: bridge.token,
-            forceUnsupported: false
+            forceUnsupported: !adapter.verified
         )
 
         let runtimeReady = await waitUntil(timeout: 20) {
-            model.bridgeStatus == .connected && model.runtimeCapabilities != nil
+            model.fullBridgeReady
         }
         XCTAssertTrue(
             runtimeReady,

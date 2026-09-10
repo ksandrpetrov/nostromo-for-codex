@@ -195,12 +195,14 @@ final class UnixSocketBridgeTests: XCTestCase {
         let bridge = try UnixSocketBridge()
         defer { bridge.stop() }
         let listening = expectation(description: "bridge listening")
-        listening.assertForOverFulfill = false
         bridge.onStatus = { status in
             if status == .listening { listening.fulfill() }
         }
         bridge.start()
         wait(for: [listening], timeout: 2)
+        // Initial readiness is a one-shot expectation. A later disconnect
+        // legitimately returns the server to listening, including during teardown.
+        bridge.onStatus = nil
 
         let directoryMode = try posixMode(bridge.runtimeDirectory.path)
         let socketMode = try posixMode(bridge.socketPath)
@@ -243,12 +245,14 @@ final class UnixSocketBridgeTests: XCTestCase {
         let bridge = try UnixSocketBridge()
         defer { bridge.stop() }
         let listening = expectation(description: "bridge listening")
-        listening.assertForOverFulfill = false
         bridge.onStatus = { status in
             if status == .listening { listening.fulfill() }
         }
         bridge.start()
         wait(for: [listening], timeout: 2)
+        // Initial readiness is a one-shot expectation. A later disconnect
+        // legitimately returns the server to listening, including during teardown.
+        bridge.onStatus = nil
 
         let rejected = try UnixTestClient(path: bridge.socketPath)
         try rejected.send([
@@ -278,12 +282,14 @@ final class UnixSocketBridgeTests: XCTestCase {
         let runtimeDirectory = bridge.runtimeDirectory
         defer { bridge.stop() }
         let listening = expectation(description: "bridge listening")
-        listening.assertForOverFulfill = false
         bridge.onStatus = { status in
             if status == .listening { listening.fulfill() }
         }
         bridge.start()
         wait(for: [listening], timeout: 2)
+        // Initial readiness is a one-shot expectation. A later disconnect
+        // legitimately returns the server to listening, including during teardown.
+        bridge.onStatus = nil
 
         for cycle in 1 ... 10 {
             let client = try UnixTestClient(path: bridge.socketPath)
@@ -336,6 +342,9 @@ final class UnixSocketBridgeTests: XCTestCase {
         }
         bridge.start()
         wait(for: [listening], timeout: 2)
+        // Initial readiness is a one-shot expectation. A later disconnect
+        // legitimately returns the server to listening, including during teardown.
+        bridge.onStatus = nil
 
         let client = try UnixTestClient(path: bridge.socketPath)
         defer { client.close() }
@@ -361,12 +370,14 @@ final class UnixSocketBridgeTests: XCTestCase {
         let bridge = try UnixSocketBridge()
         defer { bridge.stop() }
         let listening = expectation(description: "bridge listening")
-        listening.assertForOverFulfill = false
         bridge.onStatus = { status in
             if status == .listening { listening.fulfill() }
         }
         bridge.start()
         wait(for: [listening], timeout: 2)
+        // Initial readiness is a one-shot expectation. A later disconnect
+        // legitimately returns the server to listening, including during teardown.
+        bridge.onStatus = nil
 
         let malformed = try UnixTestClient(path: bridge.socketPath)
         try malformed.sendBytes(Data("{broken}\n".utf8))
@@ -389,12 +400,14 @@ final class UnixSocketBridgeTests: XCTestCase {
         let bridge = try UnixSocketBridge()
         defer { bridge.stop() }
         let listening = expectation(description: "bridge listening")
-        listening.assertForOverFulfill = false
         bridge.onStatus = { status in
             if status == .listening { listening.fulfill() }
         }
         bridge.start()
         wait(for: [listening], timeout: 2)
+        // Initial readiness is a one-shot expectation. A later disconnect
+        // legitimately returns the server to listening, including during teardown.
+        bridge.onStatus = nil
 
         let oversized = try UnixTestClient(path: bridge.socketPath)
         try oversized.sendBytes(Data(repeating: 0x41, count: 1024 * 1024 + 1))
@@ -430,6 +443,9 @@ final class UnixSocketBridgeTests: XCTestCase {
         }
         bridge.start()
         wait(for: [listening], timeout: 2)
+        // Initial readiness is a one-shot expectation. A later disconnect
+        // legitimately returns the server to listening, including during teardown.
+        bridge.onStatus = nil
 
         let client = try authenticatedClient(for: bridge)
         defer { client.close() }
@@ -484,6 +500,9 @@ final class UnixSocketBridgeTests: XCTestCase {
         }
         bridge.start()
         wait(for: [listening], timeout: 2)
+        // Initial readiness is a one-shot expectation. A later disconnect
+        // legitimately returns the server to listening, including during teardown.
+        bridge.onStatus = nil
 
         let client = try authenticatedClient(for: bridge)
         defer { client.close() }
@@ -530,6 +549,9 @@ final class UnixSocketBridgeTests: XCTestCase {
         }
         bridge.start()
         wait(for: [listening], timeout: 2)
+        // Initial readiness is a one-shot expectation. A later disconnect
+        // legitimately returns the server to listening, including during teardown.
+        bridge.onStatus = nil
 
         let client = try authenticatedClient(for: bridge)
         defer { client.close() }
@@ -585,6 +607,9 @@ final class UnixSocketBridgeTests: XCTestCase {
         }
         bridge.start()
         wait(for: [listening], timeout: 2)
+        // Initial readiness is a one-shot expectation. A later disconnect
+        // legitimately returns the server to listening, including during teardown.
+        bridge.onStatus = nil
         let client = try authenticatedClient(for: bridge)
         defer { client.close() }
 
@@ -628,6 +653,9 @@ final class UnixSocketBridgeTests: XCTestCase {
         }
         bridge.start()
         wait(for: [listening], timeout: 2)
+        // Initial readiness is a one-shot expectation. A later disconnect
+        // legitimately returns the server to listening, including during teardown.
+        bridge.onStatus = nil
         let client = try authenticatedClient(for: bridge)
         defer { client.close() }
 
@@ -656,6 +684,9 @@ final class UnixSocketBridgeTests: XCTestCase {
         }
         bridge.start()
         wait(for: [listening], timeout: 2)
+        // Initial readiness is a one-shot expectation. A later disconnect
+        // legitimately returns the server to listening, including during teardown.
+        bridge.onStatus = nil
         let client = try authenticatedClient(for: bridge)
         defer { client.close() }
         client.setReceiveBufferSize(1_024)
@@ -697,6 +728,9 @@ final class UnixSocketBridgeTests: XCTestCase {
         }
         bridge.start()
         wait(for: [listening], timeout: 2)
+        // Initial readiness is a one-shot expectation. A later disconnect
+        // legitimately returns the server to listening, including during teardown.
+        bridge.onStatus = nil
         let client = try authenticatedClient(for: bridge)
         defer { client.close() }
 

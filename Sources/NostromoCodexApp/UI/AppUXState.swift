@@ -43,6 +43,7 @@ enum StarterKeymap: String, CaseIterable, Identifiable {
 
 enum ReadinessState: Equatable {
     case ready
+    case fallback
     case setupRequired
     case controllerOff
     case permissionRequired
@@ -55,6 +56,7 @@ enum ReadinessState: Equatable {
     var title: String {
         switch self {
         case .ready: "Готово"
+        case .fallback: "Базовый режим Codex"
         case .setupRequired: "Завершите настройку"
         case .controllerOff: "Контроллер выключен"
         case .permissionRequired: "Нужен доступ к вводу"
@@ -69,6 +71,7 @@ enum ReadinessState: Equatable {
     var detail: String {
         switch self {
         case .ready: "Nostromo подключён к Codex."
+        case .fallback: "Новая задача, переход между задачами, боковая панель и настройки работают через меню macOS. Статусы, PTT и специальные команды требуют полного подключения."
         case .setupRequired: "Завершите пошаговую настройку перед использованием назначений."
         case .controllerOff: "Включите контроллер, чтобы использовать физические назначения."
         case .permissionRequired: "Разрешите мониторинг ввода, чтобы Nostromo Codex мог читать данные устройства."
@@ -83,6 +86,7 @@ enum ReadinessState: Equatable {
     var systemImage: String {
         switch self {
         case .ready: "checkmark.circle.fill"
+        case .fallback: "keyboard.badge.ellipsis"
         case .setupRequired: "sparkles"
         case .controllerOff: "pause.circle.fill"
         case .permissionRequired: "hand.raised.fill"

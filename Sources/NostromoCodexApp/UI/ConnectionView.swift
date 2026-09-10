@@ -54,6 +54,7 @@ struct ConnectionView: View {
                             .buttonStyle(NostromoButtonStyle(variant: .primary, compact: true))
                             .accessibilityValue("Перезапустить ChatGPT")
                             .accessibilityHint("Показывает предупреждение перед закрытием ChatGPT")
+                            .disabled(!model.compatibility.requiredModulesPresent || (!model.compatibility.supported && !model.configuration.forceUnsupportedChatGPT))
                         } else if !model.launcher.isRunning() {
                             Button("Запустить ChatGPT") {
                                 model.launchChatGPT()
@@ -75,6 +76,24 @@ struct ConnectionView: View {
                     }
                 }
                 .nostromoPanel()
+
+                if !model.fullBridgeReady {
+                    VStack(alignment: .leading, spacing: NostromoSpace.md) {
+                        Text("Базовые команды продолжают работать при обновлении Codex")
+                            .font(.headline)
+                        Text("Перед командой Nostromo выводит Codex вперёд. Для системного меню нужен универсальный доступ. Профили и обычные назначения сохраняются.")
+                            .font(.caption)
+                            .foregroundStyle(NostromoTheme.mutedForeground)
+                        HStack {
+                            Button("Проверить подключение") { model.refreshChatGPTConnection() }
+                            if model.fallbackNeedsPermission {
+                                Button("Разрешить универсальный доступ") { model.requestShortcutPermission() }
+                            }
+                        }
+                    }
+                    .padding(NostromoSpace.lg)
+                    .nostromoPanel()
+                }
 
                 VStack(alignment: .leading, spacing: NostromoSpace.md) {
                     Text("Поведение")
@@ -208,7 +227,7 @@ struct ConnectionView: View {
         switch model.readiness {
         case .ready: NostromoTheme.success
         case .controllerOff: .secondary
-        case .setupRequired, .permissionRequired, .deviceDisconnected, .launchChatGPT, .restartChatGPT:
+        case .fallback, .setupRequired, .permissionRequired, .deviceDisconnected, .launchChatGPT, .restartChatGPT:
             NostromoTheme.signal
         case .unsupportedChatGPT, .bridgeUnavailable:
             NostromoTheme.danger
@@ -253,14 +272,14 @@ struct ConnectionView: View {
         switch model.bridgeStatus {
         case .stopped: "Выкл."
         case .listening: "Ожидание ChatGPT"
-        case .connected: "Подключено"
+        case .connected: model.fullBridgeReady ? "Подключено" : "Проверка возможностей"
         case let .failed(message): message
         }
     }
 
     private var bridgeState: ConnectionState {
         switch model.bridgeStatus {
-        case .connected: .ready
+        case .connected: model.fullBridgeReady ? .ready : .attention
         case .listening: .attention
         case .stopped: .off
         case .failed: .error

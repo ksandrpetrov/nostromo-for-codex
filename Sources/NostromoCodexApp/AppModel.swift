@@ -148,6 +148,7 @@ final class AppModel: ObservableObject {
     let engine: Project2077Engine
     let hidOnlyMode: Bool
     private let hudPresenter: any RuntimeHUDPresenting
+    private let fallbackController: any CodexFallbackControlling
 
     // MARK: Runtime coordination state
 
@@ -163,6 +164,10 @@ final class AppModel: ObservableObject {
     private var wheelLongPressTask: Task<Void, Never>?
     private var keyboardSuppressionTask: Task<Void, Never>?
     private var hudTask: Task<Void, Never>?
+    private var connectionMonitorTask: Task<Void, Never>?
+    private var fallbackTask: Task<Void, Never>?
+    private var fallbackGeneration = 0
+    private var installationIdentifier: String?
     private var calibrationQueue: [ControlID] = []
     private var calibrationDraft: CalibrationMap?
     private var calibrationAwaitingButtonRelease: HIDSignature?
@@ -170,6 +175,7 @@ final class AppModel: ObservableObject {
     private var calibratedDPadDirections: Set<DPadDirection> = []
     private var profileRuntime: ProfileRuntimeState
     private var pressedActions: [ControlID: BindingAction] = [:]
+    private var connectionHeldControls: Set<ControlID> = []
     private var started = false
     private var attemptedAutoLaunch = false
     private var launchInProgress = false
@@ -191,6 +197,7 @@ final class AppModel: ObservableObject {
             NostromoKeyboardSuppressor(),
         preferences: AppPreferences = .ephemeral(),
         hudPresenter: any RuntimeHUDPresenting = NoopRuntimeHUDPresenter(),
+        fallbackController: any CodexFallbackControlling = CodexFallbackController(),
         hidOnlyMode: Bool = ProcessInfo.processInfo.environment["NOSTROMO_CODEX_HID_ONLY"] == "1"
     ) {
         self.preferences = preferences
@@ -200,6 +207,7 @@ final class AppModel: ObservableObject {
         self.shortcutPoster = shortcutPoster
         self.keyboardSuppressor = keyboardSuppressor
         self.hudPresenter = hudPresenter
+        self.fallbackController = fallbackController
         self.hidOnlyMode = hidOnlyMode
         let loadedConfiguration: AppConfiguration
         do {
@@ -256,17 +264,28 @@ final class AppModel: ObservableObject {
         }
         bridge.onCapabilities = { [weak self] capabilities in
             Task { @MainActor in
-                self?.runtimeCapabilities = capabilities
+                guard let self else { return }
+                let wasReady = self.fullBridgeReady
+                self.runtimeCapabilities = capabilities
+                if wasReady != self.fullBridgeReady { self.resetInputForConnectionChange() }
+                if !self.fullBridgeReady {
+                    self.taskSlots = []
+                    self.reasoningEffort = nil
+                }
+                self.chatGPTNeedsRestart = !self.fullBridgeReady && self.launcher.isRunning()
+                self.hid.applyLighting(self.effectiveLightingSummary())
             }
         }
         bridge.onRuntimeState = { [weak self] state in
             Task { @MainActor in
+                guard self?.fullBridgeReady == true else { return }
                 self?.reasoningEffort = state.reasoningEffort
             }
         }
         bridge.onTaskSlots = { [weak self] slots in
             Task { @MainActor in
                 guard let self else { return }
+                guard self.fullBridgeReady else { return }
                 let previousStatuses = Dictionary(
                     uniqueKeysWithValues: self.taskSlots.map { ($0.id, $0.status) }
                 )
@@ -317,6 +336,8 @@ final class AppModel: ObservableObject {
 
     deinit {
         keyboardSuppressionTask?.cancel()
+        connectionMonitorTask?.cancel()
+        fallbackTask?.cancel()
         // App lifecycle calls `shutdown()` while the MainActor owner is still
         // valid; actor-isolated recovery cannot safely run from `deinit`.
         hid.stop()
@@ -339,7 +360,7 @@ final class AppModel: ObservableObject {
     }
 
     private var codexIndicatorState: NostromoCodexIndicatorState {
-        guard bridgeStatus == .connected else { return .unavailable }
+        guard fullBridgeReady else { return .unavailable }
 
         if taskSlots.contains(where: {
             switch $0.status {
@@ -358,13 +379,20 @@ final class AppModel: ObservableObject {
     }
 
     var actionCatalog: [CodexActionDescriptor] {
-        if bridgeStatus == .connected, runtimeCapabilities == nil {
-            return CodexActionCatalog.runtimeCatalog(commandIDs: [])
-        }
+        guard fullBridgeReady else { return CodexActionCatalog.fallbackCatalog }
         return CodexActionCatalog.runtimeCatalog(
             commandIDs: runtimeCapabilities?.commandIDs
         )
     }
+
+    var fullBridgeReady: Bool {
+        bridgeStatus == .connected && bridge.isAuthenticated
+            && compatibility.requiredModulesPresent
+            && (compatibility.supported || configuration.forceUnsupportedChatGPT)
+            && runtimeCapabilities?.matches(compatibility) == true
+    }
+
+    var fallbackNeedsPermission: Bool { !fallbackController.hasAccess }
 
     var selectedBinding: BindingAction {
         activeProfile.bindings[selectedControl] ?? .none
@@ -434,20 +462,36 @@ final class AppModel: ObservableObject {
         case .connected:
             break
         }
-        guard compatibility.supported || configuration.forceUnsupportedChatGPT else {
-            return .unsupportedChatGPT
-        }
-        if case .failed = bridgeStatus { return .bridgeUnavailable }
-        if chatGPTNeedsRestart { return .restartChatGPT }
-        return bridgeStatus == .connected ? .ready : .launchChatGPT
+        guard compatibility.appInstalled else { return .unsupportedChatGPT }
+        return fullBridgeReady ? .ready : .fallback
     }
 
     // MARK: Application and connection lifecycle
+
+    func refreshChatGPTConnection() {
+        let identity = launcher.installationIdentifier()
+        if identity != installationIdentifier {
+            let changed = installationIdentifier != nil
+            installationIdentifier = identity
+            if changed {
+                resetInputForConnectionChange()
+                runtimeCapabilities = nil
+                taskSlots = []
+                reasoningEffort = nil
+            }
+            compatibility = launcher.compatibility()
+            // An updater can replace the bundle while the old process keeps
+            // its socket open, so no bridge-status callback may follow.
+            hid.applyLighting(effectiveLightingSummary())
+        }
+        chatGPTNeedsRestart = launcher.isRunning() && !fullBridgeReady
+    }
 
     func start() {
         guard !started else { return }
         started = true
         compatibility = launcher.compatibility()
+        installationIdentifier = launcher.installationIdentifier()
         shortcutPermissionGranted = shortcutPoster.hasPostEventAccess()
         recoverKeyboardMappingBeforeHIDOpen()
         if hidOnlyMode {
@@ -465,6 +509,13 @@ final class AppModel: ObservableObject {
             return
         }
         bridge.start()
+        connectionMonitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                guard let self, !self.shuttingDown else { return }
+                self.refreshChatGPTConnection()
+            }
+        }
         refreshSkills()
         chatGPTNeedsRestart = launcher.isRunning()
         if preferences.setupCompleted {
@@ -563,8 +614,19 @@ final class AppModel: ObservableObject {
             reportMessage("В режиме «Только HID» нельзя запускать или перезапускать ChatGPT.")
             return
         }
+        guard !launchInProgress else { return }
+        // Validate before closing the user's existing application.
+        compatibility = launcher.compatibility()
+        do {
+            try ChatGPTLauncher.validateCompatibility(compatibility, forceUnsupported: configuration.forceUnsupportedChatGPT)
+        } catch {
+            report(error)
+            return
+        }
+        launchInProgress = true
         Task {
             await launcher.terminateRunningApplications()
+            launchInProgress = false
             await launchChatGPTNow()
         }
     }
@@ -580,6 +642,18 @@ final class AppModel: ObservableObject {
             reportMessage("В режиме «Только HID» мост и запуск ChatGPT отключены.")
             return
         }
+        guard !launchInProgress else { return }
+        refreshChatGPTConnection()
+        if !(compatibility.supported || configuration.forceUnsupportedChatGPT)
+            || !compatibility.requiredModulesPresent {
+            launchInProgress = true
+            defer { launchInProgress = false }
+            do {
+                try await launcher.launchNormally()
+                chatGPTNeedsRestart = true
+            } catch { report(error) }
+            return
+        }
         guard bridgeStatus == .listening || bridgeStatus == .connected else {
             reportMessage("Приватное подключение ещё не готово. Повторите попытку через несколько секунд.")
             return
@@ -589,6 +663,7 @@ final class AppModel: ObservableObject {
             return
         }
         guard !launchInProgress else { return }
+        refreshChatGPTConnection()
         launchInProgress = true
         defer { launchInProgress = false }
         do {
@@ -722,9 +797,17 @@ final class AppModel: ObservableObject {
     }
 
     func setForceUnsupported(_ enabled: Bool) {
+        let wasReady = fullBridgeReady
         var candidate = configuration
         candidate.forceUnsupportedChatGPT = enabled
-        commitConfiguration(candidate)
+        if commitConfiguration(candidate), wasReady != fullBridgeReady {
+            resetInputForConnectionChange()
+            if !fullBridgeReady {
+                taskSlots = []
+                reasoningEffort = nil
+            }
+            hid.applyLighting(effectiveLightingSummary())
+        }
     }
 
     func setAutoLaunchChatGPT(_ enabled: Bool) {
@@ -829,6 +912,8 @@ final class AppModel: ObservableObject {
     }
 
     func shutdown() {
+        connectionMonitorTask?.cancel()
+        connectionMonitorTask = nil
         guard !shuttingDown else { return }
         shuttingDown = true
         resetActiveInputState()
@@ -992,7 +1077,7 @@ final class AppModel: ObservableObject {
         let lostAuthenticatedClient = bridgeStatus == .connected && status != .connected
         bridgeStatus = status
         if lostAuthenticatedClient {
-            resetActiveInputState()
+            resetInputForConnectionChange()
             taskSlots = []
         }
         switch status {
@@ -1052,6 +1137,9 @@ final class AppModel: ObservableObject {
     }
 
     private func resetActiveInputState() {
+        fallbackGeneration += 1
+        fallbackTask?.cancel()
+        fallbackTask = nil
         let controls = Array(pressedActions.keys)
         let now = ProcessInfo.processInfo.systemUptime
         for control in controls {
@@ -1080,6 +1168,12 @@ final class AppModel: ObservableObject {
             hudMessage = nil
             hudPresenter.dismiss()
         }
+    }
+
+    private func resetInputForConnectionChange() {
+        let held = Set(pressedActions.keys)
+        resetActiveInputState()
+        connectionHeldControls.formUnion(held)
     }
 
     private var keyboardUsagesToSuppress: Set<UInt32> {
@@ -1440,6 +1534,10 @@ final class AppModel: ObservableObject {
                 if hidOnlyMode {
                     showHUD("HID · Рассуждение \(delta > 0 ? "+" : "−")")
                 } else {
+                    guard fullBridgeReady else {
+                        reportMessage("Изменение глубины рассуждения требует полного подключения к Codex.")
+                        return
+                    }
                     let id = delta > 0 ? "composer.increaseReasoningEffort" : "composer.decreaseReasoningEffort"
                     for _ in 0 ..< abs(delta) { dispatchCommand(id) }
                     showHUD(delta > 0 ? "Рассуждение +" : "Рассуждение −")
@@ -1468,6 +1566,10 @@ final class AppModel: ObservableObject {
         pressed: Bool,
         at time: TimeInterval = ProcessInfo.processInfo.systemUptime
     ) {
+        if connectionHeldControls.contains(control) {
+            if !pressed { connectionHeldControls.remove(control) }
+            return
+        }
         if pressed {
             activeControls.insert(control)
         } else {
@@ -1513,7 +1615,7 @@ final class AppModel: ObservableObject {
         }
         switch action {
         case let .taskSlot(slot):
-            guard bridge.isAuthenticated else {
+            guard pressed ? fullBridgeReady : bridge.isAuthenticated else {
                 if pressed { reportBridgeDisconnected() }
                 return
             }
@@ -1607,6 +1709,10 @@ final class AppModel: ObservableObject {
     }
 
     private func toggleChatGPTVisibility() {
+        guard fullBridgeReady else {
+            reportMessage("Переключение окна требует полного подключения. Базовые команды сами активируют Codex.")
+            return
+        }
         let minimizeIfVisible = launcher.isActive()
         let action = BridgeAppAction.toggleChatGPT(
             minimizeIfVisible: minimizeIfVisible
@@ -1633,7 +1739,7 @@ final class AppModel: ObservableObject {
     }
 
     private func handlePushToTalk(pressed: Bool, at time: TimeInterval) {
-        guard !pressed || bridge.isAuthenticated else {
+        guard !pressed || fullBridgeReady else {
             reportBridgeDisconnected()
             return
         }
@@ -1671,6 +1777,29 @@ final class AppModel: ObservableObject {
     }
 
     private func dispatchCommand(_ id: String) {
+        if !fullBridgeReady {
+            guard let descriptor = CodexActionCatalog.descriptor(for: id),
+                  !descriptor.consequential, let fallback = descriptor.fallback else {
+                reportMessage("Этой команде требуется полное подключение к Codex.")
+                return
+            }
+            // Pick exactly one transport. Never replay an uncertain bridge
+            // result as a menu action, and never queue a burst across activation.
+            guard fallbackTask == nil else { return }
+            fallbackGeneration += 1
+            let generation = fallbackGeneration
+            fallbackTask = Task { [weak self] in
+                guard let self else { return }
+                defer { if self.fallbackGeneration == generation { self.fallbackTask = nil } }
+                do {
+                    try await self.fallbackController.perform(fallback)
+                } catch is CancellationError {
+                } catch {
+                    self.report(error)
+                }
+            }
+            return
+        }
         if let descriptor = actionCatalog.first(where: { $0.id == id }), !descriptor.available {
             reportMessage("Действие «\(descriptor.title)» недоступно: \(descriptor.detail)")
             return
@@ -1708,6 +1837,10 @@ final class AppModel: ObservableObject {
         _ action: BridgeAppAction,
         successHUD: String? = nil
     ) {
+        guard fullBridgeReady || action == .pushToTalkStop else {
+            reportMessage("Этому действию требуется полное подключение к Codex.")
+            return
+        }
         recordBridgeDispatchAttempt(action)
         bridge.dispatch(action) { [weak self] result in
             Task { @MainActor in

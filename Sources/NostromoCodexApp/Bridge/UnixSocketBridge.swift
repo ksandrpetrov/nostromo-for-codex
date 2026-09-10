@@ -15,6 +15,16 @@ struct ChatGPTRuntimeCapabilities: Equatable, Sendable {
     var commandRegistrySource: String
     var requiredAPIs: [String: Bool]
     var unavailableFeatures: [String]
+    var chatGPTVersion: String? = nil
+    var chatGPTBuild: String? = nil
+    var adapterID: String? = nil
+
+    func matches(_ compatibility: ChatGPTCompatibility) -> Bool {
+        chatGPTVersion == compatibility.version && chatGPTBuild == compatibility.build
+            && adapterID == "micro-v1"
+            && ["browserWindow", "rendererMessaging", "rendererEvaluation", "scopedHidHook", "microServiceHook"]
+                .allSatisfy { requiredAPIs[$0] == true }
+    }
 }
 
 struct ChatGPTRuntimeState: Equatable, Sendable {

@@ -127,7 +127,7 @@ struct MenuContentView: View {
         switch model.readiness {
         case .ready: NostromoTheme.success
         case .controllerOff: .secondary
-        case .setupRequired, .permissionRequired, .deviceDisconnected, .launchChatGPT, .restartChatGPT:
+        case .fallback, .setupRequired, .permissionRequired, .deviceDisconnected, .launchChatGPT, .restartChatGPT:
             NostromoTheme.signal
         case .unsupportedChatGPT, .bridgeUnavailable:
             NostromoTheme.danger

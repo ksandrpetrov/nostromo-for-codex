@@ -17,8 +17,8 @@ const SYNTHETIC_PATH = "nostromo-codex://project2077";
 const PROTOCOL_VERSION = 2;
 const REPORT_LENGTH = 64;
 const SUPPORTED_VERSION = "26.721.41059";
-const CODEX_PARENT = { filename: "/mock/codex-micro-service-CY8ASf0t.js" };
-const MAIN_PARENT = { filename: "/mock/main-CY8ASf0t.js" };
+const CODEX_PARENT = { filename: "/mock/app.asar/.vite/build/codex-micro-service-CY8ASf0t.js" };
+const MAIN_PARENT = { filename: "/mock/app.asar/.vite/build/main-CY8ASf0t.js" };
 const WORKLOUDER_PARENT = {
   filename: "/mock/node_modules/@worklouder/device-kit-oai/dist/index.js",
 };
@@ -46,6 +46,9 @@ function runAllScenarios() {
     "ptt-failsafe",
     "close-queue-guard",
     "authentication-failure",
+    "renamed-service",
+    "candidate-version",
+    "version-build-mismatch",
   ];
 
   for (const name of scenarios) {
@@ -99,6 +102,12 @@ async function runScenario(name) {
     case "forced-version":
       await testVersionGate(true);
       return;
+    case "candidate-version":
+      await testVersionGate(false, "26.903.61454", "8378");
+      return;
+    case "version-build-mismatch":
+      await testVersionGate(false, SUPPORTED_VERSION, "8378");
+      return;
     case "task-slot-metadata":
       await testTaskSlotMetadata();
       return;
@@ -114,6 +123,17 @@ async function runScenario(name) {
     case "authentication-failure":
       await testAuthenticationFailure();
       return;
+    case "renamed-service": {
+      const harness = await createHarness({ version: "26.903.61454", build: "8378", force: true, service: "service-BuBDjGBu.js" });
+      try {
+        const parent = { filename: "/mock/app.asar/.vite/build/service-BuBDjGBu.js" };
+        const topology = Module._load("hid-topology-watcher.node", parent, false);
+        assert.ok((await topology.findCodexMicroInterfaces()).some((item) => item.path === SYNTHETIC_PATH));
+        const unrelated = Module._load("hid-topology-watcher.node", { filename: "/mock/other/service-BuBDjGBu.js" }, false);
+        assert.equal(unrelated, harness.fakeTopology);
+      } finally { await harness.close(); }
+      return;
+    }
     default:
       throw new Error(`Unknown preload test scenario: ${name}`);
   }
@@ -222,6 +242,10 @@ async function testRuntimeCapabilities() {
     assert.equal(capabilities.requiredApis.rendererMessaging, true);
     assert.equal(capabilities.requiredApis.rendererEvaluation, true);
     assert.equal(capabilities.requiredApis.scopedHidHook, true);
+    assert.equal(capabilities.requiredApis.microServiceHook, true);
+    assert.equal(capabilities.chatGPTBuild, "5848");
+    assert.equal(capabilities.chatGPTVersion, SUPPORTED_VERSION);
+    assert.equal(capabilities.adapterID, "micro-v1");
     assert.equal(
       capabilities.unavailableFeatures.some((message) =>
         message.includes("Окно разрешений")),
@@ -232,6 +256,14 @@ async function testRuntimeCapabilities() {
       (message) => message.type === "runtime-state",
     );
     assert.equal(runtimeState.reasoningEffort, "high");
+    harness.windowState.destroyed = true;
+    device.publishCapabilities();
+    const unavailable = await bridgePeer.next((message) => message.type === "capabilities");
+    assert.equal(unavailable.requiredApis.rendererMessaging, false);
+    harness.windowState.destroyed = false;
+    device.publishCapabilities();
+    const recovered = await bridgePeer.next((message) => message.type === "capabilities");
+    assert.equal(recovered.requiredApis.rendererMessaging, true);
     await device.close();
   } finally {
     await harness.close();
@@ -261,9 +293,10 @@ async function testEarlyElectronUnavailable() {
   }
 }
 
-async function testVersionGate(force) {
+async function testVersionGate(force, version = "99.999.99999", build = "5848") {
   const harness = await createHarness({
-    version: "99.999.99999",
+    version,
+    build,
     force,
   });
   try {
@@ -950,6 +983,8 @@ async function createHarness(options = {}) {
     force = false,
     onConnection = () => {},
     version = SUPPORTED_VERSION,
+    build = "5848",
+    service = "codex-micro-service-CY8ASf0t.js",
   } = options;
   const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "nostromo-preload-test-"));
   const socketPath = path.join(runtime, "bridge.sock");
@@ -1113,7 +1148,7 @@ async function createHarness(options = {}) {
     ) return fakeTopology;
     if (
       typeof request === "string" &&
-      /codex-micro-service-[^\\/]+\.js$/.test(request)
+      /(?:codex-micro-service|service)-[^\\/]+\.js$/.test(request)
     ) return fakeCodexMicroServiceModule;
     if (request === "node-hid") return fakeNodeHID;
     return Reflect.apply(originalLoad, this, [request, parent, isMain]);
@@ -1137,6 +1172,9 @@ async function createHarness(options = {}) {
   process.env.NOSTROMO_CODEX_SOCKET = socketPath;
   process.env.NOSTROMO_CODEX_TOKEN = token;
   process.env.NOSTROMO_CODEX_CHATGPT_VERSION = version;
+  process.env.NOSTROMO_CODEX_CHATGPT_BUILD = build;
+  process.env.NOSTROMO_CODEX_SERVICE_MODULE = `.vite/build/${service}`;
+  process.env.NOSTROMO_CODEX_ADAPTER = "micro-v1";
   if (force) process.env.NOSTROMO_CODEX_FORCE = "1";
   process.type = "browser";
   Object.defineProperty(process.versions, "electron", {
@@ -1150,11 +1188,15 @@ async function createHarness(options = {}) {
   } finally {
     loadingPreload = false;
   }
+  Module._load(`./${service}`, MAIN_PARENT, false);
 
   assert.equal(process.env.NOSTROMO_CODEX_SOCKET, undefined);
   assert.equal(process.env.NOSTROMO_CODEX_TOKEN, undefined);
   assert.equal(process.env.NOSTROMO_CODEX_FORCE, undefined);
   assert.equal(process.env.NOSTROMO_CODEX_CHATGPT_VERSION, undefined);
+  assert.equal(process.env.NOSTROMO_CODEX_CHATGPT_BUILD, undefined);
+  assert.equal(process.env.NOSTROMO_CODEX_SERVICE_MODULE, undefined);
+  assert.equal(process.env.NOSTROMO_CODEX_ADAPTER, undefined);
   assert.equal(process.env.NODE_OPTIONS, "--trace-warnings");
 
   return {

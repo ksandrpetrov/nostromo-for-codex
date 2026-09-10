@@ -217,7 +217,7 @@ struct DashboardView: View {
         switch model.readiness {
         case .ready: NostromoTheme.success
         case .controllerOff: .secondary
-        case .setupRequired, .permissionRequired, .deviceDisconnected, .launchChatGPT, .restartChatGPT:
+        case .fallback, .setupRequired, .permissionRequired, .deviceDisconnected, .launchChatGPT, .restartChatGPT:
             NostromoTheme.signal
         case .unsupportedChatGPT, .bridgeUnavailable:
             NostromoTheme.danger
@@ -313,7 +313,7 @@ struct ReadinessPill: View {
         switch state {
         case .ready: NostromoTheme.success
         case .controllerOff: .secondary
-        case .setupRequired, .permissionRequired, .deviceDisconnected, .launchChatGPT, .restartChatGPT:
+        case .fallback, .setupRequired, .permissionRequired, .deviceDisconnected, .launchChatGPT, .restartChatGPT:
             NostromoTheme.signal
         case .unsupportedChatGPT, .bridgeUnavailable:
             NostromoTheme.danger

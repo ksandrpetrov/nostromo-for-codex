@@ -86,6 +86,8 @@ final class ChatGPTLauncherTests: XCTestCase {
             codex_desktop:message-for-view codex-micro-service- composer.submit
             data-codex-composer-root M4.5 5.75C4.5 5.05964 5.05964 4.5
             size-token-button-composer skills/list
+            codex-micro-push-to-talk-start codex-micro-push-to-talk-stop
+            codex-micro-insert-composer-text codex-micro-insert-skill-mention
             """.utf8
         )
         XCTAssertTrue(ChatGPTLauncher.validateAdapterShape(in: complete))

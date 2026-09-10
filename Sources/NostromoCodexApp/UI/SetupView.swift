@@ -351,7 +351,7 @@ struct SetupView: View {
     private var canAdvance: Bool {
         switch model.setupPhase {
         case .connect:
-            deviceConnected && model.compatibility.supported && bridgeAvailable
+            deviceConnected && ((model.compatibility.supported && bridgeAvailable) || model.compatibility.appInstalled)
         default:
             true
         }

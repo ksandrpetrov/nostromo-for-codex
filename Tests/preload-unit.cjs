@@ -11,6 +11,9 @@ const preloadPath = path.resolve(
 );
 
 process.env.NOSTROMO_CODEX_CHATGPT_VERSION = "26.721.41059";
+process.env.NOSTROMO_CODEX_CHATGPT_BUILD = "5848";
+process.env.NOSTROMO_CODEX_SERVICE_MODULE = ".vite/build/codex-micro-service-test.js";
+process.env.NOSTROMO_CODEX_ADAPTER = "micro-v1";
 process.env.NOSTROMO_CODEX_TEST_EXPORTS = "1";
 const preload = require(preloadPath);
 const bridgeActionManifest = JSON.parse(fs.readFileSync(

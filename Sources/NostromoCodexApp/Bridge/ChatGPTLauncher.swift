@@ -1,12 +1,15 @@
 import AppKit
 import Foundation
 
-struct ChatGPTCompatibility: Equatable {
+struct ChatGPTCompatibility: Equatable, Sendable {
     var version: String
     var build: String
     var supported: Bool
     var requiredModulesPresent: Bool = true
     var reason: String?
+    var serviceModule: String? = nil
+    var adapterID: String? = nil
+    var appInstalled: Bool = true
 }
 
 /// `applicationLock` owns the only mutable cross-task reference. All other
@@ -15,7 +18,17 @@ final class ChatGPTLauncher: @unchecked Sendable {
     static let bundleURL = URL(fileURLWithPath: "/Applications/ChatGPT.app", isDirectory: true)
     static let executableURL = bundleURL.appendingPathComponent("Contents/MacOS/ChatGPT")
     static let bundleIdentifier = "com.openai.codex"
-    static let supportedBuilds: Set<String> = ["5848"]
+    static var supportedBuilds: Set<String> {
+        Set(CodexCompatibilityManifest.load()?.builds.filter(\.verified).map(\.build) ?? [])
+    }
+
+    func installationIdentifier() -> String {
+        ["Contents/Info.plist", "Contents/Resources/app.asar"].map { path in
+            let attributes = try? FileManager.default.attributesOfItem(atPath: Self.bundleURL.appendingPathComponent(path).path)
+            return [FileAttributeKey.systemFileNumber, .size, .modificationDate]
+                .map { String(describing: attributes?[$0]) }.joined(separator: ":")
+        }.joined(separator: "|")
+    }
 
     private let applicationLock = NSLock()
     private var launchedApplication: NSRunningApplication?
@@ -25,14 +38,16 @@ final class ChatGPTLauncher: @unchecked Sendable {
         guard
             let dictionary = NSDictionary(contentsOf: plistURL) as? [String: Any],
             let version = dictionary["CFBundleShortVersionString"] as? String,
-            let build = dictionary["CFBundleVersion"] as? String
+            let build = dictionary["CFBundleVersion"] as? String,
+            dictionary["CFBundleIdentifier"] as? String == Self.bundleIdentifier
         else {
             return ChatGPTCompatibility(
                 version: "Не установлен",
                 build: "—",
                 supported: false,
                 requiredModulesPresent: false,
-                reason: "ChatGPT не найден в папке /Applications."
+                reason: "ChatGPT не найден в папке /Applications.",
+                appInstalled: false
             )
         }
         let requiredPaths = [
@@ -47,18 +62,25 @@ final class ChatGPTLauncher: @unchecked Sendable {
             !FileManager.default.fileExists(atPath: $0.path)
         })
         let appArchive = Self.bundleURL.appendingPathComponent("Contents/Resources/app.asar")
-        let adapterShapeVerified = (try? Data(contentsOf: appArchive, options: [.mappedIfSafe]))
-            .map(Self.validateAdapterShape(in:)) ?? false
-        let supported = Self.supportedBuilds.contains(build)
+        let manifest = CodexCompatibilityManifest.load()
+        let archive = try? Data(contentsOf: appArchive, options: [.mappedIfSafe])
+        let serviceModule = archive.flatMap { manifest?.serviceModule(in: $0) }
+        let adapterShapeVerified = serviceModule != nil && (archive.map(Self.validateAdapterShape(in:)) ?? false)
+        let entry = manifest?.entry(version: version, build: build)
+        let supported = entry?.verified == true
             && missingModule == nil
             && adapterShapeVerified
         let reason: String?
         if let missingModule {
             reason = "Отсутствует необходимый модуль ChatGPT: \(missingModule.lastPathComponent)."
+        } else if manifest == nil {
+            reason = "Отсутствует или повреждён манифест совместимости Nostromo Codex."
         } else if !adapterShapeVerified {
             reason = "Отсутствуют необходимые API интерфейса ChatGPT или Codex app-server."
-        } else if !Self.supportedBuilds.contains(build) {
-            reason = "Эта сборка ChatGPT не проверена для работы с приватным мостом."
+        } else if entry?.verified != true {
+            reason = entry == nil
+                ? "Эта сборка ChatGPT не проверена. Доступен резервный режим."
+                : "Адаптер подготовлен для этой сборки; требуется проверка в ChatGPT. Доступен резервный режим."
         } else {
             reason = nil
         }
@@ -67,20 +89,16 @@ final class ChatGPTLauncher: @unchecked Sendable {
             build: build,
             supported: supported,
             requiredModulesPresent: missingModule == nil && adapterShapeVerified,
-            reason: reason
+            reason: reason,
+            serviceModule: serviceModule,
+            adapterID: entry?.adapter ?? "micro-v1",
+            appInstalled: FileManager.default.isExecutableFile(atPath: Self.executableURL.path)
+                && dictionary["CFBundleIdentifier"] as? String == Self.bundleIdentifier
         )
     }
 
     static func validateAdapterShape(in archive: Data) -> Bool {
-        let markers = [
-            "codex_desktop:message-for-view",
-            "codex-micro-service-",
-            "composer.submit",
-            "data-codex-composer-root",
-            "M4.5 5.75C4.5 5.05964 5.05964 4.5",
-            "size-token-button-composer",
-            "skills/list",
-        ]
+        guard let markers = CodexCompatibilityManifest.load()?.rendererMarkers else { return false }
         return markers.allSatisfy { marker in
             archive.range(of: Data(marker.utf8)) != nil
         }
@@ -137,8 +155,24 @@ final class ChatGPTLauncher: @unchecked Sendable {
         environment["NOSTROMO_CODEX_TOKEN"] = token
         environment["NOSTROMO_CODEX_FORCE"] = forceUnsupported ? "1" : "0"
         environment["NOSTROMO_CODEX_CHATGPT_VERSION"] = compatibility.version
+        environment["NOSTROMO_CODEX_CHATGPT_BUILD"] = compatibility.build
+        environment["NOSTROMO_CODEX_SERVICE_MODULE"] = compatibility.serviceModule
+        environment["NOSTROMO_CODEX_ADAPTER"] = compatibility.adapterID
         environment["NODE_OPTIONS"] = "--require=\"\(preloadURL.path.replacingOccurrences(of: "\"", with: "\\\""))\""
 
+        try await openApplication(environment: environment)
+    }
+
+    func launchNormally() async throws {
+        guard !isRunning() else { return }
+        guard compatibility().appInstalled else { throw LaunchError.executableMissing }
+        let environment = ProcessInfo.processInfo.environment.filter {
+            $0.key != "NODE_OPTIONS" && !$0.key.hasPrefix("NOSTROMO_CODEX_")
+        }
+        try await openApplication(environment: environment)
+    }
+
+    private func openApplication(environment: [String: String]) async throws {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         configuration.addsToRecentItems = false
