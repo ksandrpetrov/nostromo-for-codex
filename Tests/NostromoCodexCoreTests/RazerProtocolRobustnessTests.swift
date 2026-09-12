@@ -4,10 +4,12 @@ import XCTest
 
 final class RazerProtocolRobustnessTests: XCTestCase {
     func testGoldenLEDReportsForEveryLEDAndState() {
-        for led in RazerLED.allCases {
+        let leds: [(RazerLED, UInt8)] = [(.redProfile, 0x0C), (.greenProfile, 0x0D), (.blueProfile, 0x0E)]
+        XCTAssertEqual(Set(leds.map { $0.0 }), Set(RazerLED.allCases))
+        for (led, identifier) in leds {
             for enabled in [false, true] {
                 let report = RazerProtocol.setLED(led, enabled: enabled)
-                let expectedArguments: [UInt8] = [0x01, led.rawValue, enabled ? 0x01 : 0x00]
+                let expectedArguments: [UInt8] = [0x01, identifier, enabled ? 0x01 : 0x00]
                 let expectedChecksum = independentChecksum(
                     dataSize: 3,
                     commandClass: 0x03,
@@ -151,7 +153,7 @@ final class RazerProtocolRobustnessTests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        XCTAssertEqual(report.count, RazerProtocol.reportLength, file: file, line: line)
+        XCTAssertEqual(report.count, 90, file: file, line: line)
         XCTAssertEqual(report[0], 0, file: file, line: line)
         XCTAssertEqual(report[1], 0xFF, file: file, line: line)
         XCTAssertEqual(report[2], 0, file: file, line: line)
