@@ -151,6 +151,7 @@ final class AppModel: ObservableObject {
 
     // MARK: Runtime coordination state
 
+    private let scheduler: RuntimeScheduler
     private var wheel = WheelGestureMachine()
     private var wheelPressed = false
     private var pushToTalk = PushToTalkGestureMachine()
@@ -158,11 +159,7 @@ final class AppModel: ObservableObject {
     private var dpad = DPadInterpreter()
     private var dpadButtons = DPadButtonInterpreter()
     private var activeDPadControl: ControlID?
-    private var dpadResolveTask: Task<Void, Never>?
-    private var dpadReleaseTask: Task<Void, Never>?
-    private var wheelLongPressTask: Task<Void, Never>?
     private var keyboardSuppressionTask: Task<Void, Never>?
-    private var hudTask: Task<Void, Never>?
     private var connectionMonitorTask: Task<Void, Never>?
     private var fallbackTask: Task<Void, Never>?
     private var fallbackGeneration = 0
@@ -196,8 +193,10 @@ final class AppModel: ObservableObject {
             NostromoKeyboardSuppressor(),
         preferences: AppPreferences = .ephemeral(),
         fallbackController: any CodexFallbackControlling = CodexFallbackController(),
+        clock: any RuntimeClock = SystemRuntimeClock(),
         hidOnlyMode: Bool = ProcessInfo.processInfo.environment["NOSTROMO_CODEX_HID_ONLY"] == "1"
     ) {
+        scheduler = RuntimeScheduler(clock: clock)
         self.preferences = preferences
         self.store = store
         self.launcher = launcher
@@ -932,10 +931,8 @@ final class AppModel: ObservableObject {
         calibratedButtonSignatures.removeAll()
         calibratedDPadDirections.removeAll()
         calibrationTarget = nil
-        dpadResolveTask?.cancel()
-        dpadResolveTask = nil
-        dpadReleaseTask?.cancel()
-        dpadReleaseTask = nil
+        scheduler.cancel(.dpadResolve)
+        scheduler.cancel(.dpadRelease)
         activeDPadControl = nil
         dpad = DPadInterpreter()
         dpadButtons = DPadButtonInterpreter()
@@ -946,6 +943,7 @@ final class AppModel: ObservableObject {
         connectionMonitorTask = nil
         guard !shuttingDown else { return }
         shuttingDown = true
+        scheduler.cancelAll()
         resetActiveInputState()
         hid.onEvent = nil
         hid.onState = nil
@@ -1181,14 +1179,11 @@ final class AppModel: ObservableObject {
         pushToTalkActive = false
         voiceFeedbackActive = false
         pushToTalk = PushToTalkGestureMachine()
-        wheelLongPressTask?.cancel()
-        wheelLongPressTask = nil
+        scheduler.cancel(.wheelLongPress)
         wheelPressed = false
         wheel = WheelGestureMachine(mode: wheel.mode)
-        dpadResolveTask?.cancel()
-        dpadResolveTask = nil
-        dpadReleaseTask?.cancel()
-        dpadReleaseTask = nil
+        scheduler.cancel(.dpadResolve)
+        scheduler.cancel(.dpadRelease)
         activeDPadControl = nil
         dpad = DPadInterpreter()
         dpadButtons = DPadButtonInterpreter()
@@ -1397,16 +1392,13 @@ final class AppModel: ObservableObject {
         // the idle deadline even when it resolves to the already-active
         // direction and therefore emits no new action.
         scheduleDPadRelease()
-        guard dpadResolveTask == nil else { return }
-        dpadResolveTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(13))
+        guard !scheduler.contains(.dpadResolve) else { return }
+        scheduler.schedule(.dpadResolve, after: 0.013) { [weak self] in
             guard let self else { return }
-            defer { dpadResolveTask = nil }
-            guard !Task.isCancelled else { return }
-            let now = ProcessInfo.processInfo.systemUptime
-            guard let direction = dpad.resolve(at: now) else { return }
-            applyDPadDirection(direction, at: now)
-            scheduleDPadRelease()
+            let now = self.scheduler.clock.now
+            guard let direction = self.dpad.resolve(at: now) else { return }
+            self.applyDPadDirection(direction, at: now)
+            self.scheduleDPadRelease()
         }
     }
 
@@ -1425,19 +1417,15 @@ final class AppModel: ObservableObject {
             activeDPadControl = nil
         }
         if !pressed, dpadButtons.isIdle {
-            dpadResolveTask?.cancel()
-            dpadResolveTask = nil
+            scheduler.cancel(.dpadResolve)
             return
         }
-        guard pressed, dpadResolveTask == nil else { return }
-        dpadResolveTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(13))
+        guard pressed, !scheduler.contains(.dpadResolve) else { return }
+        scheduler.schedule(.dpadResolve, after: 0.013) { [weak self] in
             guard let self else { return }
-            defer { dpadResolveTask = nil }
-            guard !Task.isCancelled else { return }
-            let now = ProcessInfo.processInfo.systemUptime
-            guard let direction = dpadButtons.resolve(at: now) else { return }
-            applyDPadDirection(direction, at: now)
+            let now = self.scheduler.clock.now
+            guard let direction = self.dpadButtons.resolve(at: now) else { return }
+            self.applyDPadDirection(direction, at: now)
         }
     }
 
@@ -1470,14 +1458,13 @@ final class AppModel: ObservableObject {
     }
 
     private func scheduleDPadRelease() {
-        dpadReleaseTask?.cancel()
-        dpadReleaseTask = Task {
-            try? await Task.sleep(for: .milliseconds(130))
-            guard !Task.isCancelled else { return }
-            let now = ProcessInfo.processInfo.systemUptime
-            guard dpad.releaseIfIdle(at: now) != nil, let active = activeDPadControl else { return }
-            execute(control: active, pressed: false, at: now)
-            activeDPadControl = nil
+        scheduler.cancel(.dpadRelease)
+        scheduler.schedule(.dpadRelease, after: 0.130) { [weak self] in
+            guard let self else { return }
+            let now = self.scheduler.clock.now
+            guard self.dpad.releaseIfIdle(at: now) != nil, let active = self.activeDPadControl else { return }
+            self.execute(control: active, pressed: false, at: now)
+            self.activeDPadControl = nil
         }
     }
 
@@ -1512,17 +1499,16 @@ final class AppModel: ObservableObject {
             activeControls.insert(.wheelPress)
             confirmPhysicalPress()
             wheel.press(at: time)
-            wheelLongPressTask?.cancel()
-            wheelLongPressTask = Task {
-                try? await Task.sleep(for: .milliseconds(610))
-                guard !Task.isCancelled else { return }
-                handleWheelOutputs(wheel.longPressFired(at: ProcessInfo.processInfo.systemUptime))
+            scheduler.cancel(.wheelLongPress)
+            scheduler.schedule(.wheelLongPress, after: 0.610) { [weak self] in
+                guard let self else { return }
+                self.handleWheelOutputs(self.wheel.longPressFired(at: self.scheduler.clock.now))
             }
         } else {
             guard wheelPressed else { return }
             wheelPressed = false
             activeControls.remove(.wheelPress)
-            wheelLongPressTask?.cancel()
+            scheduler.cancel(.wheelLongPress)
             handleWheelOutputs(wheel.release(at: time))
         }
     }
@@ -2012,15 +1998,14 @@ final class AppModel: ObservableObject {
     }
 
     private func showFeedback(_ feedback: RuntimeFeedback) {
-        hudTask?.cancel()
+        scheduler.cancel(.feedback)
         hudMessage = feedback.message
         runtimeFeedback = feedback
         guard !feedback.persistent else { return }
-        hudTask = Task {
-            try? await Task.sleep(for: .milliseconds(1_450))
-            guard !Task.isCancelled else { return }
-            hudMessage = nil
-            runtimeFeedback = nil
+        scheduler.schedule(.feedback, after: 1.450) { [weak self] in
+            guard let self else { return }
+            self.hudMessage = nil
+            self.runtimeFeedback = nil
         }
     }
 
