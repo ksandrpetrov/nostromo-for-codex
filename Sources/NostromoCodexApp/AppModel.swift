@@ -117,7 +117,8 @@ final class AppModel: ObservableObject {
     @Published var lastError: String?
     @Published var hudMessage: String?
     @Published var runtimeFeedback: RuntimeFeedback?
-    @Published var calibrationTarget: ControlID?
+    @Published private var calibration = CalibrationSession()
+    var calibrationTarget: ControlID? { calibration.target }
     @Published var chatGPTNeedsRestart = false
     @Published var compatibility: ChatGPTCompatibility
     @Published var shortcutPermissionGranted: Bool
@@ -161,11 +162,6 @@ final class AppModel: ObservableObject {
     private var fallbackTask: Task<Void, Never>?
     private var fallbackGeneration = 0
     private var installationIdentifier: String?
-    private var calibrationQueue: [ControlID] = []
-    private var calibrationDraft: CalibrationMap?
-    private var calibrationAwaitingButtonRelease: HIDSignature?
-    private var calibratedButtonSignatures: Set<String> = []
-    private var calibratedDPadDirections: Set<DPadDirection> = []
     private var profileRuntime: ProfileRuntimeState
     private var pressedActions: [ControlID: BindingAction] = [:]
     private var connectionHeldControls: Set<ControlID> = []
@@ -926,22 +922,12 @@ final class AppModel: ObservableObject {
 
     func beginCalibration() {
         resetActiveInputState()
-        calibrationDraft = configuration.calibration
-        calibrationQueue = ControlID.keypad + ControlID.dpad + [.wheelPress]
-        calibrationAwaitingButtonRelease = nil
-        calibratedButtonSignatures.removeAll()
-        calibratedDPadDirections.removeAll()
-        calibrationTarget = calibrationQueue.first
+        calibration.begin(from: configuration.calibration)
         reportMessage(nil)
     }
 
     func cancelCalibration() {
-        calibrationDraft = nil
-        calibrationQueue.removeAll()
-        calibrationAwaitingButtonRelease = nil
-        calibratedButtonSignatures.removeAll()
-        calibratedDPadDirections.removeAll()
-        calibrationTarget = nil
+        calibration.cancel()
         gestures.resetDPad()
         activeDPadControl = nil
     }
@@ -1154,7 +1140,7 @@ final class AppModel: ObservableObject {
             if calibrationTarget != nil {
                 cancelCalibration()
             } else {
-                calibrationAwaitingButtonRelease = nil
+                calibration.clearReleaseGate()
             }
             resetActiveInputState()
         case .waitingForPermission:
@@ -1332,10 +1318,7 @@ final class AppModel: ObservableObject {
         }
         hidPipelineDiagnostics.eligibleEventCount += 1
 
-        if let awaiting = calibrationAwaitingButtonRelease, event.signature.kind == .button {
-            if event.value == 0, awaiting.portableKey == event.signature.portableKey {
-                calibrationAwaitingButtonRelease = nil
-            }
+        if calibration.consumesReleaseGate(signature: event.signature, value: event.value) {
             return
         }
 
@@ -1346,16 +1329,10 @@ final class AppModel: ObservableObject {
             return
         }
 
-        if let target = calibrationTarget, event.signature.kind == .button {
-            guard !ControlID.dpad.contains(target), event.value != 0 else { return }
-            calibrationAwaitingButtonRelease = event.signature
-            guard calibratedButtonSignatures.insert(event.signature.portableKey).inserted else {
-                reportMessage("Этот физический элемент уже записан. Отпустите его, затем нажмите \(target.title).")
-                return
+        if calibrationTarget != nil, event.signature.kind == .button {
+            if let message = calibration.recordButton(event.signature, value: event.value) {
+                reportMessage(message)
             }
-            calibrationDraft?.signatures[target] = event.signature
-            if !calibrationQueue.isEmpty { calibrationQueue.removeFirst() }
-            calibrationTarget = calibrationQueue.first
             if calibrationTarget == nil { finishCalibration() }
             return
         }
@@ -1389,21 +1366,10 @@ final class AppModel: ObservableObject {
     // MARK: HID gesture routing
 
     private func applyDPadDirection(_ direction: DPadDirection, at time: TimeInterval) {
-        if let target = calibrationTarget {
-            guard ControlID.dpad.contains(target) else { return }
-            guard calibratedDPadDirections.insert(direction).inserted else {
-                reportMessage(
-                    "Это направление уже записано. Верните крестовину в центр, затем нажмите \(target.title)."
-                )
-                return
+        if calibrationTarget != nil {
+            if let message = calibration.recordDirection(direction) {
+                reportMessage(message)
             }
-            if var draft = calibrationDraft {
-                draft.dpadDirections = draft.dpadDirections.filter { $0.value != target }
-                draft.dpadDirections[direction] = target
-                calibrationDraft = draft
-            }
-            if !calibrationQueue.isEmpty { calibrationQueue.removeFirst() }
-            calibrationTarget = calibrationQueue.first
             if calibrationTarget == nil { finishCalibration() }
             return
         }
@@ -1870,13 +1836,11 @@ final class AppModel: ObservableObject {
     // MARK: Persistence and feedback
 
     private func finishCalibration() {
-        guard let draft = calibrationDraft else { return }
+        guard let draft = calibration.draft else { return }
         var candidate = configuration
         candidate.calibration = draft
         if commitConfiguration(candidate) {
-            calibrationDraft = nil
-            calibratedButtonSignatures.removeAll()
-            calibratedDPadDirections.removeAll()
+            calibration.finish()
             if case let .connected(_, captureMode) = deviceState,
                captureMode == .shared
             {
