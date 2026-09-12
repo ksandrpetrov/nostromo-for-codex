@@ -6,6 +6,35 @@ import XCTest
 
 @MainActor
 final class AppModelTests: XCTestCase {
+    func testQueuedServiceCallbacksCannotReviveShutdownModel() async {
+        let fixture = makeFixture()
+        await settle()
+        let capabilities = fixture.bridge.onCapabilities
+        let status = fixture.bridge.onStatus
+        let hidState = fixture.hid.onState
+        status?(.connected)
+        capabilities?(completeTestCapabilities())
+        hidState?(.connected(interfaceCount: 2, captureMode: .exclusive))
+        fixture.model.shutdown()
+        let dispatchCount = fixture.bridge.actions.count
+        let lightingCount = fixture.hid.lightingSummaries.count
+        await settle()
+        XCTAssertEqual(fixture.bridge.actions.count, dispatchCount)
+        XCTAssertEqual(fixture.hid.lightingSummaries.count, lightingCount)
+        XCTAssertFalse(fixture.model.inputProtectionAllowsActions)
+    }
+
+    func testLaunchRequestedAfterShutdownDoesNotReachLauncher() async {
+        let fixture = makeFixture()
+        await settle()
+        fixture.model.shutdown()
+        fixture.model.launchChatGPT()
+        fixture.model.restartThroughNostromo()
+        await settle()
+        XCTAssertEqual(fixture.launcher.launchCalls, 0)
+        XCTAssertEqual(fixture.launcher.terminateCalls, 0)
+    }
+
     func testShutdownCancelsFallbackWaitingForActivation() async {
         let fixture = makeFixture()
         fixture.fallback.delay = .milliseconds(100)

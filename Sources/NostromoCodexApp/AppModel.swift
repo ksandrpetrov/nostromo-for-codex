@@ -258,16 +258,20 @@ final class AppModel: ObservableObject {
                 try self.engine.receiveHostReport(report)
                 let state = self.engine.currentLighting()
                 Task { @MainActor in
+                    guard !self.shuttingDown else { return }
                     self.lighting = state
                     self.hid.applyLighting(self.effectiveLightingSummary())
                 }
             } catch {
-                Task { @MainActor in self.report(error) }
+                Task { @MainActor in
+                    guard !self.shuttingDown else { return }
+                    self.report(error)
+                }
             }
         }
         bridge.onCapabilities = { [weak self] capabilities in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, !self.shuttingDown else { return }
                 let wasReady = self.fullBridgeReady
                 self.runtimeCapabilities = capabilities
                 if wasReady != self.fullBridgeReady { self.resetInputForConnectionChange() }
@@ -281,13 +285,13 @@ final class AppModel: ObservableObject {
         }
         bridge.onRuntimeState = { [weak self] state in
             Task { @MainActor in
-                guard self?.fullBridgeReady == true else { return }
+                guard self?.shuttingDown == false, self?.fullBridgeReady == true else { return }
                 self?.reasoningEffort = state.reasoningEffort
             }
         }
         bridge.onTaskSlots = { [weak self] slots in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, !self.shuttingDown else { return }
                 guard self.fullBridgeReady else { return }
                 let previousStatuses = Dictionary(
                     uniqueKeysWithValues: self.taskSlots.map { ($0.id, $0.status) }
@@ -312,7 +316,7 @@ final class AppModel: ObservableObject {
         }
         hid.onDiagnostic = { [weak self] message in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, !self.shuttingDown else { return }
                 self.hidDiagnosticMessages.append(message)
                 if self.hidDiagnosticMessages.count > 200 {
                     self.hidDiagnosticMessages.removeFirst(25)
@@ -472,6 +476,7 @@ final class AppModel: ObservableObject {
     // MARK: Application and connection lifecycle
 
     func refreshChatGPTConnection() {
+        guard !shuttingDown else { return }
         let identity = launcher.installationIdentifier()
         if identity != installationIdentifier {
             let changed = installationIdentifier != nil
@@ -491,6 +496,7 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
+        guard !shuttingDown else { return }
         guard !started else { return }
         started = true
         compatibility = launcher.compatibility()
@@ -613,6 +619,7 @@ final class AppModel: ObservableObject {
     }
 
     func restartThroughNostromo() {
+        guard !shuttingDown else { return }
         guard !hidOnlyMode else {
             reportMessage("В режиме «Только HID» нельзя запускать или перезапускать ChatGPT.")
             return
@@ -680,6 +687,7 @@ final class AppModel: ObservableObject {
     }
 
     private func launchChatGPTNow() async {
+        guard !shuttingDown else { return }
         guard !hidOnlyMode else {
             reportMessage("В режиме «Только HID» мост и запуск ChatGPT отключены.")
             return
@@ -914,6 +922,7 @@ final class AppModel: ObservableObject {
                     return SkillScanner.standard(workspace: workspace).scan()
                 }
             }.value
+            guard !shuttingDown else { return }
             skills = scanned
         }
     }
@@ -946,6 +955,7 @@ final class AppModel: ObservableObject {
         bridge.onStatus = nil
         bridge.onCapabilities = nil
         bridge.onRuntimeState = nil
+        bridge.onTaskSlots = nil
         hid.stop()
         disableKeyboardSuppression()
         bridge.stop()
@@ -1096,6 +1106,7 @@ final class AppModel: ObservableObject {
     // MARK: Service callbacks and recovery
 
     private func handleBridgeStatus(_ status: BridgeStatus) {
+        guard !shuttingDown else { return }
         let lostAuthenticatedClient = bridgeStatus == .connected && status != .connected
         bridgeStatus = status
         if lostAuthenticatedClient {
@@ -1133,6 +1144,7 @@ final class AppModel: ObservableObject {
     }
 
     private func handleDeviceState(_ state: NostromoDeviceState) {
+        guard !shuttingDown else { return }
         deviceState = state
         switch state {
         case .stopped, .disconnected, .error:
@@ -1297,6 +1309,7 @@ final class AppModel: ObservableObject {
     }
 
     private func handleHIDEvent(_ event: NostromoHIDEvent) {
+        guard !shuttingDown else { return }
         lastHIDEvent = "\(event.signature.description) = \(event.value)"
         hidPipelineDiagnostics.rawEventCount += 1
         hidDiagnosticEvents.append(
@@ -1649,7 +1662,7 @@ final class AppModel: ObservableObject {
         recordBridgeDispatchAttempt(action)
         bridge.dispatch(action) { [weak self] result in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, !self.shuttingDown else { return }
                 switch result {
                 case .success:
                     self.recordBridgeDispatchSuccess()
@@ -1718,7 +1731,7 @@ final class AppModel: ObservableObject {
             fallbackGeneration += 1
             let generation = fallbackGeneration
             fallbackTask = Task { [weak self] in
-                guard let self else { return }
+                guard let self, !self.shuttingDown else { return }
                 defer { if self.fallbackGeneration == generation { self.fallbackTask = nil } }
                 do {
                     try await self.fallbackController.perform(fallback)
@@ -1737,7 +1750,7 @@ final class AppModel: ObservableObject {
         recordBridgeDispatchAttempt(action)
         bridge.dispatch(action) { [weak self] result in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, !self.shuttingDown else { return }
                 switch result {
                 case .success:
                     self.recordBridgeDispatchSuccess()
@@ -1773,7 +1786,7 @@ final class AppModel: ObservableObject {
         recordBridgeDispatchAttempt(action)
         bridge.dispatch(action) { [weak self] result in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, !self.shuttingDown else { return }
                 switch result {
                 case .success:
                     self.recordBridgeDispatchSuccess()
