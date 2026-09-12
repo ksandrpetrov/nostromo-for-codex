@@ -36,8 +36,9 @@ final class ChatGPTLaunchCoordinator {
     func start(_ request: Request) {
         guard !stopped, task == nil else { return }
         task = Task { [weak self] in
-            guard let self, !self.stopped, !Task.isCancelled else { return }
+            guard let self else { return }
             defer { self.task = nil }
+            guard !self.stopped, !Task.isCancelled else { return }
             let outcome = await self.perform(request)
             guard !self.stopped, !Task.isCancelled else { return }
             self.onOutcome(outcome)
