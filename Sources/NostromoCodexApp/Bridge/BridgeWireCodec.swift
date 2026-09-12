@@ -14,12 +14,19 @@ enum BridgeWireCodec {
     static func decodeEnvelope(_ line: Data) -> Envelope? {
         guard
             let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-            (object["v"] as? NSNumber)?.intValue == 2,
+            exactInteger(object["v"]) == 2,
             let type = object["type"] as? String
         else {
             return nil
         }
         return Envelope(type: type, object: object)
+    }
+
+    private static func exactInteger(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID()
+        else { return nil }
+        return Int(exactly: number.doubleValue)
     }
 
     static func serialize(_ object: [String: Any]) -> Data? {
@@ -87,7 +94,7 @@ enum BridgeWireCodec {
 
         for record in records {
             guard
-                let id = (record["id"] as? NSNumber)?.intValue,
+                let id = exactInteger(record["id"]),
                 (0 ... 5).contains(id),
                 identifiers.insert(id).inserted,
                 let rawStatus = record["status"] as? String,
