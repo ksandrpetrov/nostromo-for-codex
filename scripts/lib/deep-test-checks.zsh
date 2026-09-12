@@ -9,7 +9,8 @@ record_result() {
   result_names+=("$name")
   result_states+=("$state")
   result_durations+=("$duration")
-  printf '{"step":"%s","status":"%s","exitCode":%d,"durationSeconds":%d,"log":"%s"}\n' \
+  node -e 'const [step,status,code,duration,log] = process.argv.slice(1);
+    process.stdout.write(JSON.stringify({step,status,exitCode:Number(code),durationSeconds:Number(duration),log}) + "\n")' \
     "$name" "$state" "$exit_code" "$duration" "$log_path" >> "$results_jsonl"
 }
 
@@ -32,10 +33,10 @@ run_step() {
 
   if (( exit_code == 0 )); then
     print "[$name] PASS (${duration}s)"
-    record_result "$name" PASS "$exit_code" "$duration" "$log_file"
+    record_result "$name" PASS "$exit_code" "$duration" "$log_file" || exit $?
   else
     print -u2 "[$name] FAIL, exit $exit_code (${duration}s)"
-    record_result "$name" FAIL "$exit_code" "$duration" "$log_file"
+    record_result "$name" FAIL "$exit_code" "$duration" "$log_file" || exit $?
     (( failure_count += 1 ))
   fi
 }

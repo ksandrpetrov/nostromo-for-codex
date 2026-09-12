@@ -62,6 +62,10 @@ try {
     [[ $failure_count == 1 && $result_states[1] == FAIL ]]
   `);
   assert.equal(logFailure.status, 0, "log failure was ignored");
+  const quoted = run(`record_result quoted PASS 0 0 $'quote"\\npath'`);
+  assert.equal(quoted.status, 0, quoted.stderr);
+  const lastRecord = fs.readFileSync(path.join(root, "results.jsonl"), "utf8").trim().split("\n").map(JSON.parse).at(-1);
+  assert.equal(lastRecord.log, 'quote"\npath');
   console.log("deep-test runner fault injection passed");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

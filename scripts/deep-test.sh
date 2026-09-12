@@ -68,8 +68,8 @@ for required_command in swift node codesign lipo xcrun plutil tee; do
 done
 
 run_id=$(date -u +"%Y%m%dT%H%M%SZ")
-results_dir="$results_root/$run_id"
-mkdir -p "$results_dir" || exit $?
+mkdir -p "$results_root" || exit $?
+results_dir=$(mktemp -d "$results_root/$run_id.XXXXXX") || exit $?
 results_jsonl="$results_dir/results.jsonl"
 summary_file="$results_dir/summary.md"
 typeset -a result_names result_states result_durations
@@ -109,7 +109,7 @@ if (( include_hardware_inventory == 1 )); then
   run_step hardware-inventory "$project_dir/scripts/hardware-test.sh" --inventory
 fi
 
-write_summary
+write_summary || exit $?
 print
 print "Summary: $summary_file"
 print "Machine-readable results: $results_jsonl"
