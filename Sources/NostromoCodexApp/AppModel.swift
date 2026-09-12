@@ -3,101 +3,6 @@ import Combine
 import Foundation
 import IOKit.hid
 import NostromoCodexCore
-import Security
-
-struct HIDDiagnosticEntry: Codable, Identifiable, Sendable {
-    let id: UUID
-    let sequence: Int
-    let recordedAt: Date
-    let uptime: TimeInterval
-    let receivedAtUptime: TimeInterval
-    let callbackLatencyMilliseconds: Double
-    let usagePage: UInt32
-    let usage: UInt32
-    let cookie: UInt64
-    let kind: HIDEventKind
-    let value: Int
-    let eligibleForAction: Bool
-
-    init(
-        sequence: Int,
-        event: NostromoHIDEvent,
-        receivedAtUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
-    ) {
-        id = UUID()
-        self.sequence = sequence
-        recordedAt = Date()
-        uptime = event.timestamp
-        self.receivedAtUptime = receivedAtUptime
-        callbackLatencyMilliseconds = max(0, receivedAtUptime - event.timestamp) * 1_000
-        usagePage = event.signature.usagePage
-        usage = event.signature.usage
-        cookie = event.signature.cookie
-        kind = event.signature.kind
-        value = event.value
-        eligibleForAction = event.eligibleForAction
-    }
-
-    var summary: String {
-        String(
-            format: "#%04d · %04X:%04X · %@ · %d · %.2f мс",
-            sequence,
-            usagePage,
-            usage,
-            kind.rawValue,
-            value,
-            callbackLatencyMilliseconds
-        )
-    }
-}
-
-struct HIDPipelineDiagnostics: Codable, Equatable, Sendable {
-    var rawEventCount = 0
-    var eligibleEventCount = 0
-    var mappedControlCount = 0
-    var blockedActionCount = 0
-    var bindingExecutionCount = 0
-    var bridgeDispatchAttemptCount = 0
-    var bridgeDispatchSuccessCount = 0
-    var bridgeDispatchFailureCount = 0
-    var lastMappedControl: String?
-    var lastBinding: String?
-    var lastBridgeAction: String?
-    var lastDispatchOutcome: String?
-}
-
-struct ApplicationIdentityDiagnostics: Codable, Equatable, Sendable {
-    let bundleIdentifier: String?
-    let runningBundlePath: String
-    let registeredBundlePath: String?
-    let codeIdentifier: String?
-    let teamIdentifier: String?
-    let cdHash: String?
-    let signatureValidationStatus: Int32?
-}
-
-private struct HIDDiagnosticExport: Codable {
-    let formatVersion: Int
-    let generatedAt: Date
-    let vendorID: Int
-    let productID: Int
-    let hidOnlyMode: Bool
-    let applicationVersion: String
-    let applicationBuild: String
-    let applicationBundlePath: String
-    let executablePath: String?
-    let operatingSystem: String
-    let architecture: String
-    let applicationIdentity: ApplicationIdentityDiagnostics
-    let chatGPTVersion: String
-    let chatGPTBuild: String
-    let deviceState: String
-    let inputProtection: String
-    let bridgeStatus: String
-    let pipeline: HIDPipelineDiagnostics
-    let diagnosticMessages: [String]
-    let events: [HIDDiagnosticEntry]
-}
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -111,7 +16,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var runtimeCapabilities: ChatGPTRuntimeCapabilities?
     @Published private(set) var reasoningEffort: String?
     @Published private(set) var taskSlots: [CodexTaskSlot] = []
-    @Published private(set) var hidDiagnosticMessages: [String] = []
+    @Published private var diagnostics = HIDDiagnostics()
+    var hidDiagnosticMessages: [String] { diagnostics.messages }
+    var hidDiagnosticEvents: [HIDDiagnosticEntry] { diagnostics.events }
+    var hidPipelineDiagnostics: HIDPipelineDiagnostics { diagnostics.pipeline }
     @Published var lighting = CodexLightingState()
     @Published var lastHIDEvent = "Событий пока нет"
     @Published var lastError: String?
@@ -131,9 +39,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var activeControls: Set<ControlID> = []
     @Published private(set) var wheelMode: WheelMode = .scroll
     @Published private(set) var voiceFeedbackActive = false
-    @Published private(set) var hidDiagnosticEvents: [HIDDiagnosticEntry] = []
-    @Published private(set) var hidPipelineDiagnostics =
-        HIDPipelineDiagnostics()
     @Published private(set) var inputProtectionStatus:
         NostromoInputProtectionStatus = .inactive
 
@@ -169,7 +74,6 @@ final class AppModel: ObservableObject {
     private var attemptedAutoLaunch = false
     private let launches: ChatGPTLaunchCoordinator
     private var shuttingDown = false
-    private var nextHIDDiagnosticSequence = 1
     private var configurationLoadError: Error?
     private var invalidConfigurationBackupURL: URL?
     private var preferencesCancellable: AnyCancellable?
@@ -325,9 +229,9 @@ final class AppModel: ObservableObject {
         hid.onDiagnostic = { [weak self] message in
             Task { @MainActor in
                 guard let self, !self.shuttingDown else { return }
-                self.hidDiagnosticMessages.append(message)
-                if self.hidDiagnosticMessages.count > 200 {
-                    self.hidDiagnosticMessages.removeFirst(25)
+                self.diagnostics.messages.append(message)
+                if self.diagnostics.messages.count > 200 {
+                    self.diagnostics.messages.removeFirst(25)
                 }
             }
         }
@@ -414,15 +318,7 @@ final class AppModel: ObservableObject {
     }
 
     var hidCallbackLatencyP95Milliseconds: Double? {
-        guard !hidDiagnosticEvents.isEmpty else { return nil }
-        let sorted = hidDiagnosticEvents
-            .map(\.callbackLatencyMilliseconds)
-            .sorted()
-        let index = min(
-            sorted.count - 1,
-            max(0, Int(ceil(Double(sorted.count) * 0.95)) - 1)
-        )
-        return sorted[index]
+        diagnostics.latencyP95Milliseconds
     }
 
     var controllerEnabled: Bool {
@@ -435,7 +331,7 @@ final class AppModel: ObservableObject {
     }
 
     var applicationIdentityWarning: String? {
-        let identity = applicationIdentityDiagnostics
+        let identity = ApplicationDiagnostics.current
         guard Bundle.main.bundleURL.pathExtension == "app" else {
             return nil
         }
@@ -460,7 +356,7 @@ final class AppModel: ObservableObject {
     }
 
     var applicationIdentity: ApplicationIdentityDiagnostics {
-        applicationIdentityDiagnostics
+        ApplicationDiagnostics.current
     }
 
     var readiness: ReadinessState {
@@ -969,9 +865,7 @@ final class AppModel: ObservableObject {
     }
 
     func clearHIDDiagnostics() {
-        hidDiagnosticEvents.removeAll(keepingCapacity: true)
-        hidPipelineDiagnostics = HIDPipelineDiagnostics()
-        nextHIDDiagnosticSequence = 1
+        diagnostics.clear()
     }
 
     func clearError() {
@@ -998,8 +892,8 @@ final class AppModel: ObservableObject {
             executablePath: Bundle.main.executableURL?.path,
             operatingSystem:
                 ProcessInfo.processInfo.operatingSystemVersionString,
-            architecture: Self.runtimeArchitecture,
-            applicationIdentity: applicationIdentityDiagnostics,
+            architecture: ApplicationDiagnostics.runtimeArchitecture,
+            applicationIdentity: ApplicationDiagnostics.current,
             chatGPTVersion: compatibility.version,
             chatGPTBuild: compatibility.build,
             deviceState: diagnosticDeviceState,
@@ -1009,10 +903,7 @@ final class AppModel: ObservableObject {
             diagnosticMessages: hidDiagnosticMessages,
             events: hidDiagnosticEvents
         )
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .millisecondsSince1970
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(snapshot)
+        return try snapshot.encoded()
     }
 
     func exportHIDDiagnostics() {
@@ -1206,7 +1097,7 @@ final class AppModel: ObservableObject {
             default:
                 "Не удалось включить защиту от клавиатурного ввода Nostromo."
             }
-            self.hidDiagnosticMessages.append(message)
+            self.diagnostics.messages.append(message)
             self.reportMessage(message)
         }
     }
@@ -1216,7 +1107,7 @@ final class AppModel: ObservableObject {
         keyboardSuppressionTask = nil
         let result = keyboardSuppressor.restore()
         if !result.isComplete {
-            hidDiagnosticMessages.append(
+            diagnostics.messages.append(
                 "Восстановление UserKeyMapping не завершено: "
                     + restorationFailureSummary(result)
             )
@@ -1227,7 +1118,7 @@ final class AppModel: ObservableObject {
     private func recoverKeyboardMappingBeforeHIDOpen() {
         let result = keyboardSuppressor.recover()
         guard !result.isComplete else { return }
-        hidDiagnosticMessages.append(
+        diagnostics.messages.append(
             "Ожидает восстановления UserKeyMapping: "
                 + restorationFailureSummary(result)
         )
@@ -1255,8 +1146,8 @@ final class AppModel: ObservableObject {
     }
 
     private func reportUnsafeInputProtection() {
-        hidPipelineDiagnostics.blockedActionCount += 1
-        hidPipelineDiagnostics.lastDispatchOutcome =
+        diagnostics.pipeline.blockedActionCount += 1
+        diagnostics.pipeline.lastDispatchOutcome =
             "blocked: input protection is not verified"
         reportMessage(
             "Назначения приостановлены: macOS не подтвердила безопасную "
@@ -1268,25 +1159,11 @@ final class AppModel: ObservableObject {
     private func handleHIDEvent(_ event: NostromoHIDEvent) {
         guard !shuttingDown else { return }
         lastHIDEvent = "\(event.signature.description) = \(event.value)"
-        hidPipelineDiagnostics.rawEventCount += 1
-        hidDiagnosticEvents.append(
-            HIDDiagnosticEntry(
-                sequence: nextHIDDiagnosticSequence,
-                event: event
-            )
-        )
-        nextHIDDiagnosticSequence += 1
-        let eventLimit = hidOnlyMode ? 2_000 : 256
-        if hidDiagnosticEvents.count > eventLimit {
-            hidDiagnosticEvents.removeFirst(
-                hidDiagnosticEvents.count - eventLimit
-            )
-        }
+        diagnostics.record(event, limit: hidOnlyMode ? 2_000 : 256)
         guard event.eligibleForAction else {
             lastHIDEvent += " · подавлено после переподключения"
             return
         }
-        hidPipelineDiagnostics.eligibleEventCount += 1
 
         if calibration.consumesReleaseGate(signature: event.signature, value: event.value) {
             return
@@ -1488,8 +1365,8 @@ final class AppModel: ObservableObject {
             guard pressedActions[control] == nil else { return }
             action = activeProfile.bindings[control] ?? .none
             pressedActions[control] = action
-            hidPipelineDiagnostics.bindingExecutionCount += 1
-            hidPipelineDiagnostics.lastBinding =
+            diagnostics.pipeline.bindingExecutionCount += 1
+            diagnostics.pipeline.lastBinding =
                 BindingSummary.text(for: action)
             confirmPhysicalPress()
         } else {
@@ -1904,24 +1781,24 @@ final class AppModel: ObservableObject {
     }
 
     private func recordMappedControl(_ control: ControlID) {
-        hidPipelineDiagnostics.mappedControlCount += 1
-        hidPipelineDiagnostics.lastMappedControl = control.title
+        diagnostics.pipeline.mappedControlCount += 1
+        diagnostics.pipeline.lastMappedControl = control.title
     }
 
     private func recordBridgeDispatchAttempt(_ action: BridgeAppAction) {
-        hidPipelineDiagnostics.bridgeDispatchAttemptCount += 1
-        hidPipelineDiagnostics.lastBridgeAction = action.name
-        hidPipelineDiagnostics.lastDispatchOutcome = "pending"
+        diagnostics.pipeline.bridgeDispatchAttemptCount += 1
+        diagnostics.pipeline.lastBridgeAction = action.name
+        diagnostics.pipeline.lastDispatchOutcome = "pending"
     }
 
     private func recordBridgeDispatchSuccess() {
-        hidPipelineDiagnostics.bridgeDispatchSuccessCount += 1
-        hidPipelineDiagnostics.lastDispatchOutcome = "success"
+        diagnostics.pipeline.bridgeDispatchSuccessCount += 1
+        diagnostics.pipeline.lastDispatchOutcome = "success"
     }
 
     private func recordBridgeDispatchFailure(_ error: Error) {
-        hidPipelineDiagnostics.bridgeDispatchFailureCount += 1
-        hidPipelineDiagnostics.lastDispatchOutcome =
+        diagnostics.pipeline.bridgeDispatchFailureCount += 1
+        diagnostics.pipeline.lastDispatchOutcome =
             "failure: \(error.localizedDescription)"
     }
 
@@ -1970,65 +1847,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private nonisolated static var runtimeArchitecture: String {
-        #if arch(arm64)
-        "arm64"
-        #elseif arch(x86_64)
-        "x86_64"
-        #else
-        "unknown"
-        #endif
-    }
-
-    private var applicationIdentityDiagnostics:
-        ApplicationIdentityDiagnostics
-    {
-        let bundleIdentifier = Bundle.main.bundleIdentifier
-        let registeredURL = bundleIdentifier.flatMap {
-            NSWorkspace.shared.urlForApplication(
-                withBundleIdentifier: $0
-            )
-        }
-        var dynamicCode: SecCode?
-        var staticCode: SecStaticCode?
-        var signingInfo: CFDictionary?
-        var validationStatus: OSStatus?
-        if SecCodeCopySelf([], &dynamicCode) == errSecSuccess,
-           let dynamicCode,
-           SecCodeCopyStaticCode(dynamicCode, [], &staticCode)
-            == errSecSuccess,
-           let staticCode
-        {
-            validationStatus = SecStaticCodeCheckValidity(
-                staticCode,
-                SecCSFlags(rawValue: kSecCSStrictValidate),
-                nil
-            )
-            _ = SecCodeCopySigningInformation(
-                staticCode,
-                SecCSFlags(rawValue: kSecCSSigningInformation),
-                &signingInfo
-            )
-        }
-        let dictionary = signingInfo as? [String: Any]
-        let unique = dictionary?[
-            kSecCodeInfoUnique as String
-        ] as? Data
-        return ApplicationIdentityDiagnostics(
-            bundleIdentifier: bundleIdentifier,
-            runningBundlePath: Bundle.main.bundleURL.path,
-            registeredBundlePath: registeredURL?.path,
-            codeIdentifier:
-                dictionary?[kSecCodeInfoIdentifier as String] as? String,
-            teamIdentifier:
-                dictionary?[kSecCodeInfoTeamIdentifier as String] as? String,
-            cdHash: unique?.map {
-                String(format: "%02x", $0)
-            }.joined(),
-            signatureValidationStatus: validationStatus
-        )
-    }
-
     private func preloadURL() -> URL? {
         let bundleIdentifier = Bundle.main.bundleIdentifier
             ?? "dev.aleksandr.nostromo-codex"
@@ -2052,37 +1870,5 @@ final class AppModel: ObservableObject {
                 isDirectory: true
             )
         )
-    }
-}
-
-// MARK: Resource discovery
-
-enum AppResourceLocator {
-    private static let packagedPreloadPath =
-        "Contents/Resources/chatgpt-preload.cjs"
-    private static let developmentPreloadPath =
-        "Sources/NostromoCodexApp/Resources/chatgpt-preload.cjs"
-
-    static func preloadURL(
-        packagedURL: URL?,
-        applicationURLs: [URL],
-        currentDirectoryURL: URL
-    ) -> URL? {
-        var candidates: [URL] = []
-        if let packagedURL {
-            candidates.append(packagedURL)
-        }
-        candidates.append(
-            contentsOf: applicationURLs.map {
-                $0.appendingPathComponent(packagedPreloadPath)
-            }
-        )
-        candidates.append(
-            currentDirectoryURL.appendingPathComponent(developmentPreloadPath)
-        )
-
-        return candidates.first {
-            FileManager.default.isReadableFile(atPath: $0.path)
-        }
     }
 }
