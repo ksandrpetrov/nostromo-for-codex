@@ -270,6 +270,16 @@ function assertPrivatePath(filePath, kind, mode, owner) {
   }
 }
 
+// A JSON value is not necessarily a protocol envelope. Keep validation at
+// the framing boundary so malformed input never escapes a socket callback.
+function decodeBridgeMessage(line) {
+  const message = JSON.parse(line);
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    throw new TypeError("Bridge message must be a JSON object");
+  }
+  return message;
+}
+
 function openBridgeConnection() {
   return new Promise((resolve, reject) => {
     let endpoint;
@@ -319,7 +329,7 @@ function openBridgeConnection() {
         if (!line.trim()) continue;
         let message;
         try {
-          message = JSON.parse(line);
+          message = decodeBridgeMessage(line);
         } catch {
           fail(new Error("Nostromo Codex вернул некорректный JSON согласования"));
           return;
@@ -589,7 +599,7 @@ class VirtualHIDAsyncDevice extends EventEmitter {
       if (!line.trim()) continue;
       let message;
       try {
-        message = JSON.parse(line);
+        message = decodeBridgeMessage(line);
       } catch {
         this.emitAsyncError(new Error("Nostromo Codex отправил некорректный JSON"));
         continue;
@@ -599,6 +609,7 @@ class VirtualHIDAsyncDevice extends EventEmitter {
         continue;
       }
       if (message.type === "device-report") {
+        if (typeof message.data !== "string") continue;
         const report = Buffer.from(message.data || "", "base64");
         if (report.length === REPORT_LENGTH && report.toString("base64") === message.data) {
           this.emit("data", report);

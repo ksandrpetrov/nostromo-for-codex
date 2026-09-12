@@ -477,6 +477,17 @@ async function testVirtualHIDAndActions() {
     assert.match(asyncErrors[0].message, /некорректный JSON/);
     assert.equal(receivedReports.length, 1);
 
+    // Syntactically valid JSON can still be an invalid envelope. None of
+    // these frames may throw out of the socket data callback or emit a report.
+    for (const frame of ["null", "[]", "true", "42", '"text"']) {
+      bridgePeer.socket.write(`${frame}\n`);
+    }
+    for (const data of [null, 42, {}, [], true]) {
+      bridgePeer.send({ v: PROTOCOL_VERSION, type: "device-report", data });
+    }
+    await waitUntil(() => asyncErrors.length === 6);
+    assert.equal(receivedReports.length, 1);
+
     harness.windowState.visible = false;
     harness.windowState.minimized = true;
     bridgePeer.send({
@@ -855,6 +866,8 @@ async function testAuthenticationFailure() {
           });
         } else if (connectionCount === 2) {
           socket.write("not-json\n");
+        } else if (connectionCount === 3) {
+          socket.write("null\n");
         } else {
           socket.write("x".repeat(1024 * 1024 + 1));
         }
@@ -874,9 +887,13 @@ async function testAuthenticationFailure() {
     );
     await assert.rejects(
       hid.HIDAsync.open(SYNTHETIC_PATH),
+      /некорректный JSON согласования/,
+    );
+    await assert.rejects(
+      hid.HIDAsync.open(SYNTHETIC_PATH),
       /превысили 1 МиБ/,
     );
-    assert.equal(connectionCount, 3);
+    assert.equal(connectionCount, 4);
   } finally {
     await harness.close();
   }
