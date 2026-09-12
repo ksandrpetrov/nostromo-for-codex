@@ -167,7 +167,7 @@ final class AppModel: ObservableObject {
     private var connectionHeldControls: Set<ControlID> = []
     private var started = false
     private var attemptedAutoLaunch = false
-    private var launchInProgress = false
+    private let launches: ChatGPTLaunchCoordinator
     private var shuttingDown = false
     private var nextHIDDiagnosticSequence = 1
     private var configurationLoadError: Error?
@@ -195,6 +195,7 @@ final class AppModel: ObservableObject {
         self.preferences = preferences
         self.store = store
         self.launcher = launcher
+        launches = ChatGPTLaunchCoordinator(launcher: launcher)
         self.hid = hid
         self.shortcutPoster = shortcutPoster
         self.keyboardSuppressor = keyboardSuppressor
@@ -230,6 +231,13 @@ final class AppModel: ObservableObject {
             onLighting: { _ in }
         )
 
+        launches.onOutcome = { [weak self] outcome in
+            guard let self, !self.shuttingDown else { return }
+            if let needsRestart = outcome.needsRestart {
+                self.chatGPTNeedsRestart = needsRestart
+            }
+            if let message = outcome.errorMessage { self.reportMessage(message) }
+        }
         gestures.onDirection = { [weak self] direction, time in
             self?.applyDPadDirection(direction, at: time)
         }
@@ -624,7 +632,7 @@ final class AppModel: ObservableObject {
             reportMessage("В режиме «Только HID» нельзя запускать или перезапускать ChatGPT.")
             return
         }
-        guard !launchInProgress else { return }
+        guard !launches.inProgress else { return }
         // Validate before closing the user's existing application.
         compatibility = launcher.compatibility()
         do {
@@ -641,67 +649,20 @@ final class AppModel: ObservableObject {
             reportMessage("Встроенный адаптер ChatGPT отсутствует.")
             return
         }
-        let forceUnsupported = configuration.forceUnsupportedChatGPT
-        launchInProgress = true
-        Task {
-            defer { launchInProgress = false }
-            await launcher.terminateRunningApplications()
-            guard !shuttingDown else { return }
-            do {
-                try await launcher.launch(
-                    preloadURL: preload,
-                    socketPath: bridge.socketPath,
-                    sessionDescriptorPath: bridge.sessionDescriptorPath,
-                    token: bridge.token,
-                    forceUnsupported: forceUnsupported
-                )
-                chatGPTNeedsRestart = false
-            } catch {
-                guard !shuttingDown else { return }
-                let bridgeError = error.localizedDescription
-                guard !launcher.isRunning() else {
-                    report(error)
-                    return
-                }
-                do {
-                    try await launcher.launchNormally()
-                    chatGPTNeedsRestart = true
-                    reportMessage(
-                        "ChatGPT открыт в обычном режиме. Подключение Nostromo "
-                            + "не удалось: \(bridgeError)"
-                    )
-                } catch {
-                    reportMessage(
-                        "Не удалось открыть ChatGPT после перезапуска: "
-                            + "\(error.localizedDescription) Подключение Nostromo: \(bridgeError)"
-                    )
-                }
-            }
-        }
+        launches.start(.restart(bridgeLaunchRequest(preload: preload)))
     }
 
     func launchChatGPT() {
-        Task {
-            await launchChatGPTNow()
-        }
-    }
-
-    private func launchChatGPTNow() async {
         guard !shuttingDown else { return }
         guard !hidOnlyMode else {
             reportMessage("В режиме «Только HID» мост и запуск ChatGPT отключены.")
             return
         }
-        guard !launchInProgress else { return }
+        guard !launches.inProgress else { return }
         refreshChatGPTConnection()
         if !(compatibility.supported || configuration.forceUnsupportedChatGPT)
             || !compatibility.requiredModulesPresent {
-            launchInProgress = true
-            defer { launchInProgress = false }
-            do {
-                try await launcher.launchNormally()
-                chatGPTNeedsRestart = true
-            } catch { report(error) }
+            launches.start(.normal)
             return
         }
         guard bridgeStatus == .listening || bridgeStatus == .connected else {
@@ -712,22 +673,17 @@ final class AppModel: ObservableObject {
             reportMessage("Встроенный адаптер ChatGPT отсутствует.")
             return
         }
-        guard !launchInProgress else { return }
-        refreshChatGPTConnection()
-        launchInProgress = true
-        defer { launchInProgress = false }
-        do {
-            try await launcher.launch(
-                preloadURL: preload,
-                socketPath: bridge.socketPath,
-                sessionDescriptorPath: bridge.sessionDescriptorPath,
-                token: bridge.token,
-                forceUnsupported: configuration.forceUnsupportedChatGPT
-            )
-            chatGPTNeedsRestart = false
-        } catch {
-            report(error)
-        }
+        launches.start(.bridge(bridgeLaunchRequest(preload: preload)))
+    }
+
+    private func bridgeLaunchRequest(preload: URL) -> ChatGPTLaunchCoordinator.BridgeRequest {
+        ChatGPTLaunchCoordinator.BridgeRequest(
+            preloadURL: preload,
+            socketPath: bridge.socketPath,
+            sessionDescriptorPath: bridge.sessionDescriptorPath,
+            token: bridge.token,
+            forceUnsupported: configuration.forceUnsupportedChatGPT
+        )
     }
 
     // MARK: Profiles and persistent configuration
@@ -946,6 +902,7 @@ final class AppModel: ObservableObject {
         connectionMonitorTask = nil
         guard !shuttingDown else { return }
         shuttingDown = true
+        launches.stop()
         scheduler.cancelAll()
         resetActiveInputState()
         hid.onEvent = nil
