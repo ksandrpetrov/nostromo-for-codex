@@ -12,6 +12,7 @@ node --check Sources/NostromoCodexApp/Resources/chatgpt-preload.cjs
 node Tests/preload-unit.cjs
 node Tests/preload-smoke.cjs
 node Tests/docs-links.cjs
+node Tests/deep-test-runner.cjs
 ```
 
 Этого достаточно для локальной итерации над Swift, bridge contracts, preload
@@ -23,12 +24,13 @@ node Tests/docs-links.cjs
 ./scripts/deep-test.sh --full --hardware-inventory
 ```
 
-Runner продолжает работу после отдельного сбоя, собирает итоговую матрицу и
+Runner проверяет промежуточные ошибки инструментов и запись логов,
+продолжает работу после отдельного сбоя, собирает итоговую матрицу и
 возвращает ненулевой exit code, если не прошёл хотя бы один шаг. Логи,
 `results.jsonl` и `summary.md` сохраняются вне репозитория:
 
 ```text
-${TMPDIR}/nostromo-codex-deep-test/<UTC timestamp>/
+${TMPDIR}/nostromo-codex-deep-test/<UTC timestamp>.<unique suffix>/
 ```
 
 Другой каталог задаётся через `--results-dir`. Быстрый вариант без
@@ -83,3 +85,33 @@ HID-only может эксклюзивно захватить Nostromo и упр
 
 Датированные результаты хранятся в [`audits/`](audits/). Они являются
 историческими снимками, а не rolling badge текущей ветки.
+
+## Структура тестов и покрытие
+
+`AppModel*Tests` разделены по lifecycle, actions, input, profiles, lighting и
+presentation. Общие зависимости находятся в `AppModelTestSupport.swift`.
+Fixture завершает модель и удаляет временную конфигурацию после теста.
+`RuntimeSchedulerTests` и `InputGestureCoordinatorTests` проверяют временные
+контракты с `ManualRuntimeClock`. Реальные socket/concurrency-тесты сохранены.
+
+Для XCTest нужен полный Xcode. Если системный `xcode-select` указывает на
+CommandLineTools, задайте `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`
+для команды, не меняя системную настройку.
+
+Замер покрытия с отдельным новым каталогом Node на каждый замер:
+
+```sh
+swift test --enable-code-coverage --skip NostromoCodexAppTests.LiveChatGPTE2ETests
+coverage_dir=$(mktemp -d)
+NODE_V8_COVERAGE="$coverage_dir" node Tests/preload-unit.cjs
+NODE_V8_COVERAGE="$coverage_dir" node Tests/preload-smoke.cjs
+node scripts/coverage-summary.cjs \
+  .build/arm64-apple-macosx/debug/codecov/NostromoCodex.json "$coverage_dir"
+```
+
+Сводка показывает LLVM line coverage отдельно для Core, приложения и UI.
+Для preload показана доля вызванных функций V8 по объединению процессов,
+а не line/branch coverage. Не объединяйте данные разных ревизий в одном
+каталоге. Процент не заменяет проверку критических контрактов и физических
+сценариев. Матрица контрактов и результаты переработки описаны в
+[maintainability.md](maintainability.md).

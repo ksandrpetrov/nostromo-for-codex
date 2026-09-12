@@ -29,6 +29,21 @@ slots через `BridgeWireCodec` в `AppModel`, после чего обнов
   Lock снимается ядром при завершении процесса, файл не удаляется.
 - `AppModel` координирует UI и сервисы на MainActor. Он не должен содержать
   POSIX, IOHID или JSON-framing детали.
+- `InputGestureCoordinator` владеет интерпретаторами D-pad/колеса и их
+  временными границами. Он выдаёт направления, отпускания и результаты
+  жестов, но не проверяет permissions и не dispatch-ит команды.
+- `RuntimeScheduler` владеет заменяемыми таймерами на MainActor. Каждый
+  таймер имеет identity, поэтому отменённая задача не выполняется и не
+  очищает заменившую её задачу. `RuntimeClock` использует monotonic uptime,
+  а в тестах позволяет управлять временем без физических задержек.
+- `CalibrationSession` владеет очередью, черновиком и ожиданием отпускания.
+  Фасад сохраняет только законченный draft через `commitConfiguration`.
+  После успешной записи последнее физическое отпускание ещё поглощается.
+- `ChatGPTLaunchCoordinator` владеет единственной задачей запуска/перезапуска.
+  Фасад проверяет совместимость, bridge и preload до разрешения перезапуска.
+  Terminal stop отменяет задачу и запрещает публикацию позднего результата.
+- `HIDDiagnostics` владеет ограниченной историей событий и счётчиками.
+  Формирование JSON и чтение code-signing identity вынесены из UI-фасада.
 - `ProfileRuntimeState` владеет persistent profile ID и transient
   momentary-стеком. Momentary‑выбор виден в UI, но не сохраняется.
 - Постоянная конфигурация изменяется candidate-first: сначала валидация и
@@ -49,10 +64,13 @@ slots через `BridgeWireCodec` в `AppModel`, после чего обнов
   атомарно публикует session descriptor `0600`, а при остановке удаляет его
   только если descriptor всё ещё принадлежит этому процессу.
 - `BridgeWireCodec` является чистой границей protocol v2 и не владеет I/O.
+  Версия и ID слота принимают только целые числовые значения, без
+  усечения дробей и преобразования JSON boolean в число.
 - preload dependency-free, compatibility-gated, проверяет owner/permissions
   discovery descriptor и автоматически переподключает существующий
   виртуальный HID с ограниченным exponential backoff. Он никогда не изменяет
-  `ChatGPT.app`.
+  `ChatGPT.app`. `BridgeLineBuffer` отделяет framing от authentication и
+  dispatch. JSON envelope проверяется как объект до доступа к его полям.
 - `CodexCompatibilityManifest` читает общий с preload manifest и находит
   единственный сервис Micro по контракту в ASAR. Имя bundle chunk не является
   контрактом. Кандидат сборки остаётся непроверенным до opt-in live-теста.
@@ -93,6 +111,8 @@ invariants отклоняются.
   остаётся в атомарном recovery marker для следующего процесса.
 - Plugin prompt только подготавливает composer и не отправляет сообщение.
 - Disconnect/shutdown всегда останавливают PTT и отпускают активные actions.
+  Callback-и, уже ожидающие MainActor при shutdown, не возвращают модель
+  в рабочее состояние и не выполняют новые действия.
 - Momentary profile никогда не заменяет persistent active profile на диске.
 - Неизвестная ChatGPT build блокируется; expert override не обходит
   отсутствие обязательных private modules.
