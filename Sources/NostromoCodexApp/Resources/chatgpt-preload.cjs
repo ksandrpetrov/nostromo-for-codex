@@ -270,6 +270,25 @@ function assertPrivatePath(filePath, kind, mode, owner) {
   }
 }
 
+// Socket framing is independent of authentication, reconnection and actions.
+// Handshake hands its unread remainder to the authenticated connection.
+class BridgeLineBuffer {
+  constructor() { this.remainder = ""; }
+
+  append(chunk) {
+    this.remainder += chunk;
+    return this.remainder.length <= MAX_BUFFER;
+  }
+
+  takeLine() {
+    const newline = this.remainder.indexOf("\n");
+    if (newline < 0) return null;
+    const line = this.remainder.slice(0, newline);
+    this.remainder = this.remainder.slice(newline + 1);
+    return line;
+  }
+}
+
 // A JSON value is not necessarily a protocol envelope. Keep validation at
 // the framing boundary so malformed input never escapes a socket callback.
 function decodeBridgeMessage(line) {
@@ -293,7 +312,7 @@ function openBridgeConnection() {
     const socket = net.createConnection(endpoint.socketPath);
     socket.setNoDelay(true);
     socket.setEncoding("utf8");
-    let buffer = "";
+    const framing = new BridgeLineBuffer();
     let settled = false;
     const timeout = setTimeout(
       () => fail(new Error("Истекло время ожидания моста Nostromo Codex")),
@@ -316,16 +335,13 @@ function openBridgeConnection() {
     const onClose = () =>
       fail(new Error("Мост Nostromo Codex закрылся во время согласования"));
     const onData = (chunk) => {
-      buffer += chunk;
-      if (buffer.length > MAX_BUFFER) {
+      if (!framing.append(chunk)) {
         fail(new Error("Данные согласования Nostromo Codex превысили 1 МиБ"));
         return;
       }
       for (;;) {
-        const newline = buffer.indexOf("\n");
-        if (newline < 0) return;
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
+        const line = framing.takeLine();
+        if (line === null) return;
         if (!line.trim()) continue;
         let message;
         try {
@@ -344,7 +360,7 @@ function openBridgeConnection() {
         }
         settled = true;
         cleanup();
-        resolve({ buffer, socket });
+        resolve({ buffer: framing.remainder, socket });
         return;
       }
     };
@@ -386,7 +402,7 @@ class VirtualHIDAsyncDevice extends EventEmitter {
   constructor(socket, initialBuffer = "") {
     super();
     this.socket = null;
-    this.buffer = "";
+    this.framing = new BridgeLineBuffer();
     this.closed = false;
     this.closeEmitted = false;
     this.connectionGeneration = 0;
@@ -434,7 +450,7 @@ class VirtualHIDAsyncDevice extends EventEmitter {
     this.connectionGeneration += 1;
     const generation = this.connectionGeneration;
     this.socket = socket;
-    this.buffer = "";
+    this.framing = new BridgeLineBuffer();
     this.reconnectAttempt = 0;
     this.taskSlotsDigest = null;
     this.capabilityDigest = null;
@@ -504,7 +520,7 @@ class VirtualHIDAsyncDevice extends EventEmitter {
       this.connectionGeneration !== generation
     ) return;
     this.socket = null;
-    this.buffer = "";
+    this.framing = new BridgeLineBuffer();
     this.connectionGeneration += 1;
     this.stopPushToTalkFailSafe();
     if (this.closed) {
@@ -585,17 +601,14 @@ class VirtualHIDAsyncDevice extends EventEmitter {
 
   receive(chunk, generation = this.connectionGeneration) {
     if (this.closed || generation !== this.connectionGeneration) return;
-    this.buffer += chunk;
-    if (this.buffer.length > MAX_BUFFER) {
+    if (!this.framing.append(chunk)) {
       this.emitAsyncError(new Error("Буфер моста Nostromo Codex превысил 1 МиБ"));
       this.socket.destroy();
       return;
     }
     for (;;) {
-      const newline = this.buffer.indexOf("\n");
-      if (newline < 0) return;
-      const line = this.buffer.slice(0, newline);
-      this.buffer = this.buffer.slice(newline + 1);
+      const line = this.framing.takeLine();
+      if (line === null) return;
       if (!line.trim()) continue;
       let message;
       try {
@@ -604,30 +617,34 @@ class VirtualHIDAsyncDevice extends EventEmitter {
         this.emitAsyncError(new Error("Nostromo Codex отправил некорректный JSON"));
         continue;
       }
-      if (message.v !== PROTOCOL_VERSION) {
-        this.emitAsyncError(new Error(`Неподдерживаемая версия протокола Nostromo: ${message.v}`));
-        continue;
+      this.receiveMessage(message, generation);
+    }
+  }
+
+  receiveMessage(message, generation) {
+    if (message.v !== PROTOCOL_VERSION) {
+      this.emitAsyncError(new Error(`Неподдерживаемая версия протокола Nostromo: ${message.v}`));
+      return;
+    }
+    if (message.type === "device-report") {
+      if (typeof message.data !== "string") return;
+      const report = Buffer.from(message.data || "", "base64");
+      if (report.length === REPORT_LENGTH && report.toString("base64") === message.data) {
+        this.emit("data", report);
       }
-      if (message.type === "device-report") {
-        if (typeof message.data !== "string") continue;
-        const report = Buffer.from(message.data || "", "base64");
-        if (report.length === REPORT_LENGTH && report.toString("base64") === message.data) {
-          this.emit("data", report);
-        }
-        continue;
-      }
-      if (message.type === "app-action") {
-        const actionGeneration = generation;
-        this.actionQueue = this.actionQueue
-          .then(() => this.handleAction(message, actionGeneration))
-          .catch((error) => {
-            this.emitAsyncError(error instanceof Error ? error : new Error(String(error)));
-          });
-        continue;
-      }
-      if (message.type === "error") {
-        this.emitAsyncError(new Error(message.message || "Ошибка моста Nostromo Codex"));
-      }
+      return;
+    }
+    if (message.type === "app-action") {
+      const actionGeneration = generation;
+      this.actionQueue = this.actionQueue
+        .then(() => this.handleAction(message, actionGeneration))
+        .catch((error) => {
+          this.emitAsyncError(error instanceof Error ? error : new Error(String(error)));
+        });
+      return;
+    }
+    if (message.type === "error") {
+      this.emitAsyncError(new Error(message.message || "Ошибка моста Nostromo Codex"));
     }
   }
 
@@ -1437,6 +1454,7 @@ installScopedHooks();
 // launcher never sets this flag.
 if (process.env.NOSTROMO_CODEX_TEST_EXPORTS === "1") {
   module.exports = Object.freeze({
+    BridgeLineBuffer,
     appActionContract: APP_ACTION_CONTRACT,
     assertCompatible,
     focusChatGPT,

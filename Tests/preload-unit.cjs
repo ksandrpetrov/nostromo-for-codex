@@ -31,6 +31,19 @@ assert.deepEqual(
   "preload action names and payload keys must match the shared bridge contract",
 );
 
+const framing = new preload.BridgeLineBuffer();
+assert.equal(framing.append('{"v":'), true);
+assert.equal(framing.takeLine(), null);
+assert.equal(framing.append('2}\n\nnext\npartial'), true);
+assert.equal(framing.takeLine(), '{"v":2}');
+assert.equal(framing.takeLine(), "");
+assert.equal(framing.takeLine(), "next");
+assert.equal(framing.takeLine(), null);
+assert.equal(framing.remainder, "partial");
+const bounded = new preload.BridgeLineBuffer();
+assert.equal(bounded.append("x".repeat(1024 * 1024)), true);
+assert.equal(bounded.append("x"), false);
+
 const state = {
   appFocus: 0,
   appShow: 0,
@@ -122,4 +135,4 @@ assert.deepEqual(state, {
   visible: true,
 });
 
-process.stdout.write("preload socket-free regressions: 5/5 passed\n");
+process.stdout.write("preload socket-free regressions passed\n");
