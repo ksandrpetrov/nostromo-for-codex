@@ -151,13 +151,10 @@ final class AppModel: ObservableObject {
 
     // MARK: Runtime coordination state
 
+    private let gestures: InputGestureCoordinator
     private let scheduler: RuntimeScheduler
-    private var wheel = WheelGestureMachine()
-    private var wheelPressed = false
     private var pushToTalk = PushToTalkGestureMachine()
     private var pushToTalkActive = false
-    private var dpad = DPadInterpreter()
-    private var dpadButtons = DPadButtonInterpreter()
     private var activeDPadControl: ControlID?
     private var keyboardSuppressionTask: Task<Void, Never>?
     private var connectionMonitorTask: Task<Void, Never>?
@@ -196,7 +193,9 @@ final class AppModel: ObservableObject {
         clock: any RuntimeClock = SystemRuntimeClock(),
         hidOnlyMode: Bool = ProcessInfo.processInfo.environment["NOSTROMO_CODEX_HID_ONLY"] == "1"
     ) {
-        scheduler = RuntimeScheduler(clock: clock)
+        let scheduler = RuntimeScheduler(clock: clock)
+        self.scheduler = scheduler
+        gestures = InputGestureCoordinator(scheduler: scheduler)
         self.preferences = preferences
         self.store = store
         self.launcher = launcher
@@ -234,6 +233,18 @@ final class AppModel: ObservableObject {
             sendReport: { report in localBridge.sendDeviceReport(report) },
             onLighting: { _ in }
         )
+
+        gestures.onDirection = { [weak self] direction, time in
+            self?.applyDPadDirection(direction, at: time)
+        }
+        gestures.onDirectionReleased = { [weak self] time in
+            guard let self, let active = self.activeDPadControl else { return }
+            self.execute(control: active, pressed: false, at: time)
+            self.activeDPadControl = nil
+        }
+        gestures.onWheelOutputs = { [weak self] outputs in
+            self?.handleWheelOutputs(outputs)
+        }
 
         let localEngine = engine
         bridge.onStatus = { [weak self] status in
@@ -931,11 +942,8 @@ final class AppModel: ObservableObject {
         calibratedButtonSignatures.removeAll()
         calibratedDPadDirections.removeAll()
         calibrationTarget = nil
-        scheduler.cancel(.dpadResolve)
-        scheduler.cancel(.dpadRelease)
+        gestures.resetDPad()
         activeDPadControl = nil
-        dpad = DPadInterpreter()
-        dpadButtons = DPadButtonInterpreter()
     }
 
     func shutdown() {
@@ -1179,14 +1187,8 @@ final class AppModel: ObservableObject {
         pushToTalkActive = false
         voiceFeedbackActive = false
         pushToTalk = PushToTalkGestureMachine()
-        scheduler.cancel(.wheelLongPress)
-        wheelPressed = false
-        wheel = WheelGestureMachine(mode: wheel.mode)
-        scheduler.cancel(.dpadResolve)
-        scheduler.cancel(.dpadRelease)
+        gestures.reset()
         activeDPadControl = nil
-        dpad = DPadInterpreter()
-        dpadButtons = DPadButtonInterpreter()
         activeControls.removeAll()
         if runtimeFeedback?.kind == .voice {
             runtimeFeedback = nil
@@ -1340,7 +1342,7 @@ final class AppModel: ObservableObject {
         if event.signature.usagePage == UInt32(kHIDPage_KeyboardOrKeypad),
            let button = DPadButton(keyboardUsage: event.signature.usage)
         {
-            handleDPadButton(button, pressed: event.value != 0, at: event.timestamp)
+            gestures.ingest(button: button, pressed: event.value != 0, at: event.timestamp)
             return
         }
 
@@ -1365,10 +1367,10 @@ final class AppModel: ObservableObject {
                 handleWheelRotation(event.value, at: event.timestamp)
                 return
             case UInt32(kHIDUsage_GD_X):
-                handleDPadAxis(.x, value: event.value, at: event.timestamp)
+                gestures.ingest(axis: .x, value: event.value, at: event.timestamp)
                 return
             case UInt32(kHIDUsage_GD_Y):
-                handleDPadAxis(.y, value: event.value, at: event.timestamp)
+                gestures.ingest(axis: .y, value: event.value, at: event.timestamp)
                 return
             default:
                 break
@@ -1385,49 +1387,6 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: HID gesture routing
-
-    private func handleDPadAxis(_ axis: DPadAxis, value: Int, at time: TimeInterval) {
-        dpad.ingest(axis: axis, value: value, at: time)
-        // Relative joystick reports repeat while held. Every report extends
-        // the idle deadline even when it resolves to the already-active
-        // direction and therefore emits no new action.
-        scheduleDPadRelease()
-        guard !scheduler.contains(.dpadResolve) else { return }
-        scheduler.schedule(.dpadResolve, after: 0.013) { [weak self] in
-            guard let self else { return }
-            let now = self.scheduler.clock.now
-            guard let direction = self.dpad.resolve(at: now) else { return }
-            self.applyDPadDirection(direction, at: now)
-            self.scheduleDPadRelease()
-        }
-    }
-
-    private func handleDPadButton(
-        _ button: DPadButton,
-        pressed: Bool,
-        at time: TimeInterval
-    ) {
-        let releasedDirection = dpadButtons.ingest(
-            button: button,
-            pressed: pressed,
-            at: time
-        )
-        if releasedDirection != nil, let active = activeDPadControl {
-            execute(control: active, pressed: false, at: time)
-            activeDPadControl = nil
-        }
-        if !pressed, dpadButtons.isIdle {
-            scheduler.cancel(.dpadResolve)
-            return
-        }
-        guard pressed, !scheduler.contains(.dpadResolve) else { return }
-        scheduler.schedule(.dpadResolve, after: 0.013) { [weak self] in
-            guard let self else { return }
-            let now = self.scheduler.clock.now
-            guard let direction = self.dpadButtons.resolve(at: now) else { return }
-            self.applyDPadDirection(direction, at: now)
-        }
-    }
 
     private func applyDPadDirection(_ direction: DPadDirection, at time: TimeInterval) {
         if let target = calibrationTarget {
@@ -1457,22 +1416,10 @@ final class AppModel: ObservableObject {
         execute(control: mappedControl, pressed: true, at: time)
     }
 
-    private func scheduleDPadRelease() {
-        scheduler.cancel(.dpadRelease)
-        scheduler.schedule(.dpadRelease, after: 0.130) { [weak self] in
-            guard let self else { return }
-            let now = self.scheduler.clock.now
-            guard self.dpad.releaseIfIdle(at: now) != nil, let active = self.activeDPadControl else { return }
-            self.execute(control: active, pressed: false, at: now)
-            self.activeDPadControl = nil
-        }
-    }
-
     private func handleWheelPress(pressed: Bool, at time: TimeInterval) {
         if inputTestMode {
             if pressed {
-                guard !wheelPressed else { return }
-                wheelPressed = true
+                guard !activeControls.contains(.wheelPress) else { return }
                 activeControls.insert(.wheelPress)
                 showFeedback(
                     RuntimeFeedback(
@@ -1483,7 +1430,6 @@ final class AppModel: ObservableObject {
                     )
                 )
             } else {
-                wheelPressed = false
                 activeControls.remove(.wheelPress)
             }
             return
@@ -1494,22 +1440,14 @@ final class AppModel: ObservableObject {
                 reportUnsafeInputProtection()
                 return
             }
-            guard !wheelPressed else { return }
-            wheelPressed = true
+            guard !gestures.wheelPressed else { return }
             activeControls.insert(.wheelPress)
             confirmPhysicalPress()
-            wheel.press(at: time)
-            scheduler.cancel(.wheelLongPress)
-            scheduler.schedule(.wheelLongPress, after: 0.610) { [weak self] in
-                guard let self else { return }
-                self.handleWheelOutputs(self.wheel.longPressFired(at: self.scheduler.clock.now))
-            }
+            gestures.pressWheel(at: time)
         } else {
-            guard wheelPressed else { return }
-            wheelPressed = false
+            guard gestures.wheelPressed else { return }
             activeControls.remove(.wheelPress)
-            scheduler.cancel(.wheelLongPress)
-            handleWheelOutputs(wheel.release(at: time))
+            gestures.releaseWheel(at: time)
         }
     }
 
@@ -1531,7 +1469,7 @@ final class AppModel: ObservableObject {
             return
         }
         confirmPhysicalPress()
-        handleWheelOutputs(wheel.rotate(delta: delta, at: time))
+        gestures.rotateWheel(delta, at: time)
     }
 
     private func handleWheelOutputs(_ outputs: [WheelOutput]) {
