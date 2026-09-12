@@ -130,68 +130,28 @@ final class UnixSocketBridge: @unchecked Sendable {
     private var taskSlotsHandler: TaskSlotsHandler?
 
     var onStatus: StatusHandler? {
-        get {
-            handlerLock.lock()
-            defer { handlerLock.unlock() }
-            return statusHandler
-        }
-        set {
-            handlerLock.lock()
-            statusHandler = newValue
-            handlerLock.unlock()
-        }
+        get { handlerLock.withLock { statusHandler } }
+        set { handlerLock.withLock { statusHandler = newValue } }
     }
 
     var onHostReport: HostReportHandler? {
-        get {
-            handlerLock.lock()
-            defer { handlerLock.unlock() }
-            return hostReportHandler
-        }
-        set {
-            handlerLock.lock()
-            hostReportHandler = newValue
-            handlerLock.unlock()
-        }
+        get { handlerLock.withLock { hostReportHandler } }
+        set { handlerLock.withLock { hostReportHandler = newValue } }
     }
 
     var onCapabilities: CapabilitiesHandler? {
-        get {
-            handlerLock.lock()
-            defer { handlerLock.unlock() }
-            return capabilitiesHandler
-        }
-        set {
-            handlerLock.lock()
-            capabilitiesHandler = newValue
-            handlerLock.unlock()
-        }
+        get { handlerLock.withLock { capabilitiesHandler } }
+        set { handlerLock.withLock { capabilitiesHandler = newValue } }
     }
 
     var onRuntimeState: RuntimeStateHandler? {
-        get {
-            handlerLock.lock()
-            defer { handlerLock.unlock() }
-            return runtimeStateHandler
-        }
-        set {
-            handlerLock.lock()
-            runtimeStateHandler = newValue
-            handlerLock.unlock()
-        }
+        get { handlerLock.withLock { runtimeStateHandler } }
+        set { handlerLock.withLock { runtimeStateHandler = newValue } }
     }
 
     var onTaskSlots: TaskSlotsHandler? {
-        get {
-            handlerLock.lock()
-            defer { handlerLock.unlock() }
-            return taskSlotsHandler
-        }
-        set {
-            handlerLock.lock()
-            taskSlotsHandler = newValue
-            handlerLock.unlock()
-        }
+        get { handlerLock.withLock { taskSlotsHandler } }
+        set { handlerLock.withLock { taskSlotsHandler = newValue } }
     }
 
     init(
