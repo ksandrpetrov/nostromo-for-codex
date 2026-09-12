@@ -6,6 +6,12 @@ import XCTest
 
 @MainActor
 class AppModelTestCase: XCTestCase {
+    func advance(_ clock: ManualRuntimeClock, by interval: TimeInterval) async {
+        await drainTasks()
+        clock.advance(by: interval)
+        await drainTasks()
+    }
+
     func settle() async {
         await Task.yield()
         try? await Task.sleep(for: .milliseconds(5))

@@ -176,7 +176,8 @@ final class AppModelInputTests: AppModelTestCase {
     }
 
     func testPhysicalKeyboardPageDPadExecutesDiagonalExactlyOnce() async {
-        let fixture = makeFixture()
+        let clock = ManualRuntimeClock()
+        let fixture = makeFixture(clock: clock)
         let model = fixture.model
         let originalID = model.configuration.activeProfileID
         let target = ControllerProfile(name: "Keyboard D-pad", bindings: [:])
@@ -185,7 +186,7 @@ final class AppModelInputTests: AppModelTestCase {
             .profileSwitch(profileID: target.id, behavior: .momentary),
             for: .dpadUpRight
         )
-        let now = ProcessInfo.processInfo.systemUptime
+        let now = clock.now
 
         fixture.hid.emit(
             signature: HIDSignature(
@@ -207,7 +208,7 @@ final class AppModelInputTests: AppModelTestCase {
             value: 1,
             timestamp: now + 0.002
         )
-        try? await Task.sleep(for: .milliseconds(25))
+        await advance(clock, by: 0.025)
         XCTAssertEqual(model.configuration.activeProfileID, target.id)
 
         fixture.hid.emit(
@@ -307,7 +308,8 @@ final class AppModelInputTests: AppModelTestCase {
     }
 
     func testRepeatedDPadReportsRescheduleMomentaryRelease() async {
-        let fixture = makeFixture()
+        let clock = ManualRuntimeClock()
+        let fixture = makeFixture(clock: clock)
         let model = fixture.model
         let originalID = model.configuration.activeProfileID
         let target = ControllerProfile(name: "Held D-pad", bindings: [:])
@@ -317,19 +319,19 @@ final class AppModelInputTests: AppModelTestCase {
             for: .dpadUp
         )
 
-        let startedAt = ProcessInfo.processInfo.systemUptime
+        let startedAt = clock.now
         let yAxis = HIDSignature(usagePage: 0x01, usage: 0x31, cookie: 103, kind: .axis)
         fixture.hid.emit(signature: yAxis, value: -1, timestamp: startedAt)
-        try? await Task.sleep(for: .milliseconds(30))
+        await advance(clock, by: 0.03)
         XCTAssertEqual(model.configuration.activeProfileID, target.id)
 
         // Nostromo's relative axis repeats while the stick remains held.
-        try? await Task.sleep(for: .milliseconds(60))
+        await advance(clock, by: 0.06)
         fixture.hid.emit(signature: yAxis, value: -1, timestamp: startedAt + 0.09)
-        try? await Task.sleep(for: .milliseconds(60))
+        await advance(clock, by: 0.06)
         XCTAssertEqual(model.configuration.activeProfileID, target.id)
 
-        try? await Task.sleep(for: .milliseconds(100))
+        await advance(clock, by: 0.1)
         XCTAssertEqual(model.configuration.activeProfileID, originalID)
     }
 
@@ -435,7 +437,8 @@ final class AppModelInputTests: AppModelTestCase {
     }
 
     func testPermutedDPadCalibrationReleasesMappedControlOnTransition() async {
-        let fixture = makeFixture()
+        let clock = ManualRuntimeClock()
+        let fixture = makeFixture(clock: clock)
         let model = fixture.model
         let originalID = model.configuration.activeProfileID
         let first = ControllerProfile(name: "Mapped up", bindings: [:])
@@ -456,13 +459,13 @@ final class AppModelInputTests: AppModelTestCase {
                 .profileSwitch(profileID: second.id, behavior: .momentary)
         }
 
-        let startedAt = ProcessInfo.processInfo.systemUptime
+        let startedAt = clock.now
         fixture.hid.emit(
             signature: HIDSignature(usagePage: 0x01, usage: 0x31, cookie: 103, kind: .axis),
             value: -1,
             timestamp: startedAt
         )
-        try? await Task.sleep(for: .milliseconds(30))
+        await advance(clock, by: 0.03)
         XCTAssertEqual(model.configuration.activeProfileID, first.id)
 
         fixture.hid.emit(
@@ -470,18 +473,18 @@ final class AppModelInputTests: AppModelTestCase {
             value: 1,
             timestamp: startedAt + 0.03
         )
-        try? await Task.sleep(for: .milliseconds(30))
+        await advance(clock, by: 0.03)
         XCTAssertEqual(model.configuration.activeProfileID, first.id)
 
-        try? await Task.sleep(for: .milliseconds(140))
+        await advance(clock, by: 0.14)
         XCTAssertEqual(model.configuration.activeProfileID, originalID)
 
         fixture.hid.emit(
             signature: HIDSignature(usagePage: 0x01, usage: 0x30, cookie: 102, kind: .axis),
             value: 1,
-            timestamp: ProcessInfo.processInfo.systemUptime
+            timestamp: clock.now
         )
-        try? await Task.sleep(for: .milliseconds(30))
+        await advance(clock, by: 0.03)
         XCTAssertEqual(model.configuration.activeProfileID, second.id)
     }
 
@@ -513,7 +516,8 @@ final class AppModelInputTests: AppModelTestCase {
     }
 
     func testCancelCalibrationCancelsPendingDPadResolution() async {
-        let fixture = makeFixture()
+        let clock = ManualRuntimeClock()
+        let fixture = makeFixture(clock: clock)
         let model = fixture.model
         let target = ControllerProfile(name: "Must not activate", bindings: [:])
         model.configuration.profiles.append(target)
@@ -527,11 +531,11 @@ final class AppModelInputTests: AppModelTestCase {
         fixture.hid.emit(
             signature: HIDSignature(usagePage: 0x01, usage: 0x31, cookie: 103, kind: .axis),
             value: -1,
-            timestamp: ProcessInfo.processInfo.systemUptime
+            timestamp: clock.now
         )
-        try? await Task.sleep(for: .milliseconds(5))
+        await advance(clock, by: 0.005)
         model.cancelCalibration()
-        try? await Task.sleep(for: .milliseconds(30))
+        await advance(clock, by: 0.03)
 
         XCTAssertNotEqual(model.configuration.activeProfileID, target.id)
         XCTAssertEqual(fixture.bridge.actions.count, actionCount)
